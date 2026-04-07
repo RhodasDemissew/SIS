@@ -1,0 +1,2792 @@
+import React, { useState, useEffect } from 'react';
+import { Routes, Route, Navigate, useLocation, NavLink } from 'react-router-dom';
+import { 
+  Users, 
+  BookOpen, 
+  GraduationCap, 
+  Settings, 
+  LayoutDashboard, 
+  ClipboardList, 
+  CreditCard, 
+  FileText,
+  LogOut,
+  UserCircle,
+  Link as LinkIcon,
+  Search,
+  CheckCircle,
+  AlertCircle,
+  UserPlus,
+  PlusCircle,
+  Trash2,
+  X,
+  Eye,
+  Info,
+  MapPin,
+  Phone,
+  User,
+  Calendar,
+  Download
+} from 'lucide-react';
+
+/** Build and download a CSV file. rows: array of arrays (first = header) or array of objects. */
+function downloadCsv(filename, rows) {
+  const escape = (v) => {
+    const s = String(v ?? '');
+    if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+  const lines = Array.isArray(rows[0]) && rows[0].length
+    ? rows.map((row) => row.map(escape).join(','))
+    : rows.length
+      ? [Object.keys(rows[0]).map(escape).join(','), ...rows.map((row) => Object.values(row).map(escape).join(','))]
+      : [];
+  const csv = lines.join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// Updated Mock Data for K-12 and Levels
+const INITIAL_COURSES = [
+  { id: 'ENG-BEG', name: 'English Fundamentals', level: 'Beginner', faculty: 'Ms. Aster' },
+  { id: 'MATH-G5', name: 'Grade 5 Mathematics', level: 'Grade 5', faculty: 'Ato Solomon' },
+  { id: 'SCI-G8', name: 'Grade 8 Integrated Science', level: 'Grade 8', faculty: 'W/ro Mulu' },
+  { id: 'AMH-ADV', name: 'Advanced Amharic Literature', level: 'Advanced', faculty: 'Ato Kebede' },
+];
+
+const INITIAL_STUDENTS = [
+  { 
+    id: 'STU001', 
+    name: 'Yohannes Tesfaye', 
+    email: 'yohannes@edu.et', 
+    status: 'Active', 
+    balance: 1200, 
+    level: 'Grade 10',
+    age: 16,
+    gender: 'Male',
+    phone: '+251 911 223344',
+    location: 'Addis Ababa, Bole'
+  },
+  { 
+    id: 'STU002', 
+    name: 'Sara Bekele', 
+    email: 'sara.b@edu.et', 
+    status: 'Active', 
+    balance: 0, 
+    level: 'Intermediate',
+    age: 19,
+    gender: 'Female',
+    phone: '+251 912 556677',
+    location: 'Addis Ababa, Sarbet'
+  },
+  { 
+    id: 'STU003', 
+    name: 'Dawit Mengistu', 
+    email: 'dawit.m@edu.et', 
+    status: 'Probation', 
+    balance: 450, 
+    level: 'Advanced',
+    age: 22,
+    gender: 'Male',
+    phone: '+251 910 889900',
+    location: 'Adama, City Center'
+  },
+];
+
+const SIS_TOKEN_KEY = 'sis_token';
+const SIS_ACTIVE_ROLE_KEY = 'sis_active_role';
+const SIS_ALLOWED_ROLES = ['admin', 'student'];
+
+function apiFetch(url, options = {}) {
+  const token = typeof window !== 'undefined' ? window.localStorage.getItem(SIS_TOKEN_KEY) : null;
+  const activeRole = typeof window !== 'undefined' ? window.localStorage.getItem(SIS_ACTIVE_ROLE_KEY) : null;
+  const headers = { ...options.headers };
+  if (!headers['Accept'] && !headers['accept']) headers['Accept'] = 'application/json';
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (activeRole && SIS_ALLOWED_ROLES.includes(activeRole)) headers['X-SIS-ROLE'] = activeRole;
+  return fetch(url, { ...options, headers }).then((res) => {
+    if (res.status === 401 && typeof window !== 'undefined') {
+      window.localStorage.removeItem(SIS_TOKEN_KEY);
+      window.localStorage.removeItem(SIS_ACTIVE_ROLE_KEY);
+      if (window.__sisOnUnauthorized) window.__sisOnUnauthorized();
+    }
+    if (res.status === 403 && typeof window !== 'undefined') {
+      if (window.__sisOnForbidden) window.__sisOnForbidden();
+    }
+    return res;
+  });
+}
+
+function friendlyStatusMessage(status, fallback) {
+  if (status === 401) return 'Your session expired. Please sign in again.';
+  if (status === 403) return 'Access denied for your current role.';
+  return fallback;
+}
+
+const LandingLogin = ({ onLogin }) => {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    if (!username.trim() || !password) {
+      setError('Please enter username and password.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ username: username.trim(), password }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.message || data.errors?.username?.[0] || 'Login failed.');
+        return;
+      }
+      if (data.token && typeof window !== 'undefined') {
+        window.localStorage.setItem(SIS_TOKEN_KEY, data.token);
+        onLogin();
+      } else {
+        setError('Invalid response from server.');
+      }
+    } catch (err) {
+      setError(err.message || 'Unable to sign in right now. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-indigo-950 flex items-center justify-center p-6">
+      <div className="w-full max-w-md">
+        <div className="bg-white rounded-3xl shadow-2xl overflow-hidden border border-indigo-100">
+          <div className="p-8 pb-6 bg-indigo-900 text-white text-center">
+            <h1 className="text-3xl font-bold tracking-tight text-white">SIS</h1>
+            <p className="text-indigo-200 text-sm mt-2 uppercase tracking-widest font-semibold">Student Information System</p>
+            <p className="text-indigo-300/90 text-xs mt-3 max-w-xs mx-auto">
+              View grades and manage student information linked to DNEC EthioEducation LMS.
+            </p>
+          </div>
+          <form onSubmit={handleSubmit} autoComplete="off" className="p-8 pt-6 space-y-5">
+            {error && (
+              <p className="text-red-600 bg-red-50 border border-red-100 rounded-xl px-4 py-2 text-sm">{error}</p>
+            )}
+            <div>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Username</label>
+              <input
+                type="text"
+                placeholder="your Moodle username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                autoComplete="off"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Password</label>
+              <input
+                type="password"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                autoComplete="current-password"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 disabled:opacity-70 transition-all shadow-lg shadow-indigo-100"
+            >
+              {loading ? 'Signing in…' : 'Sign in with Moodle account'}
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const App = () => {
+  const location = useLocation();
+  const [isLoggedIn, setIsLoggedIn] = useState(() => typeof window !== 'undefined' && !!window.localStorage.getItem(SIS_TOKEN_KEY));
+  const [currentUser, setCurrentUser] = useState(null);
+  const [userRole, setUserRole] = useState(() => {
+    if (typeof window === 'undefined') return 'admin';
+    return window.localStorage.getItem(SIS_ACTIVE_ROLE_KEY) || 'admin';
+  });
+  const pathname = (location.pathname || '/').replace(/^\//, '') || 'dashboard';
+  const activeTab = pathname;
+  const [students, setStudents] = useState(INITIAL_STUDENTS);
+  const [admissionsStudents, setAdmissionsStudents] = useState([]);
+  const [admissionsLoading, setAdmissionsLoading] = useState(false);
+  const [courses, setCourses] = useState(INITIAL_COURSES);
+  const [showAdmissionModal, setShowAdmissionModal] = useState(false);
+  const [showCurriculumModal, setShowCurriculumModal] = useState(false);
+  const [selectedStudent, setSelectedStudent] = useState(null);
+
+  const handleLogin = React.useCallback(() => setIsLoggedIn(true), []);
+
+  const handleLogout = React.useCallback(() => {
+    const hadToken = typeof window !== 'undefined' && !!window.localStorage.getItem(SIS_TOKEN_KEY);
+    if (hadToken) {
+      apiFetch('/api/logout', { method: 'POST' }).catch(() => {});
+    }
+    if (typeof window !== 'undefined') window.localStorage.removeItem(SIS_TOKEN_KEY);
+    if (typeof window !== 'undefined') window.localStorage.removeItem(SIS_ACTIVE_ROLE_KEY);
+    setCurrentUser(null);
+    setIsLoggedIn(false);
+  }, []);
+
+  React.useEffect(() => {
+    window.__sisOnUnauthorized = handleLogout;
+    window.__sisOnForbidden = () => {
+      alert('Access denied for this action with your current role.');
+    };
+    return () => {
+      window.__sisOnUnauthorized = null;
+      window.__sisOnForbidden = null;
+    };
+  }, [handleLogout]);
+
+  React.useEffect(() => {
+    if (!isLoggedIn) return;
+    let cancelled = false;
+    apiFetch('/api/me')
+      .then((res) => (res.ok ? res.json() : Promise.reject(res)))
+      .then((data) => {
+        if (cancelled) return;
+        const user = data.user || null;
+        setCurrentUser(user);
+        const rolesRaw = Array.isArray(user?.roles) && user.roles.length ? user.roles : ['admin'];
+        const roles = rolesRaw.filter((role) => SIS_ALLOWED_ROLES.includes(role));
+        if (!roles.length) roles.push('student');
+        const preferred =
+          (typeof window !== 'undefined' && window.localStorage.getItem(SIS_ACTIVE_ROLE_KEY)) || roles[0];
+        const nextRole = roles.includes(preferred) ? preferred : roles[0];
+        setUserRole(nextRole);
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem(SIS_ACTIVE_ROLE_KEY, nextRole);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) handleLogout();
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoggedIn, handleLogout]);
+
+  const menuItems = {
+    student: [
+      { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+      { id: 'curriculum', label: 'Grades Explorer', icon: GraduationCap },
+      { id: 'moodle', label: 'DNEC EthioEducation LMS Sync', icon: LinkIcon },
+    ],
+    admin: [
+      { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+      { id: 'admissions', label: 'Admissions', icon: Users },
+      { id: 'curriculum', label: 'Grades Explorer', icon: BookOpen },
+      { id: 'moodle', label: 'DNEC EthioEducation LMS Sync', icon: LinkIcon },
+      { id: 'settings', label: 'Settings', icon: Settings },
+    ]
+  };
+
+  const loadAdmissionsStudents = React.useCallback(() => {
+    setAdmissionsLoading(true);
+    apiFetch('/api/students')
+      .then((res) => (res.ok ? res.json() : Promise.reject(res)))
+      .then((data) => setAdmissionsStudents(data.students || []))
+      .catch((res) => {
+        alert(friendlyStatusMessage(res?.status, 'Could not load students right now.'));
+        setAdmissionsStudents([]);
+      })
+      .finally(() => setAdmissionsLoading(false));
+  }, []);
+
+  React.useEffect(() => {
+    if (activeTab === 'admissions') loadAdmissionsStudents();
+  }, [activeTab, loadAdmissionsStudents]);
+
+  const handleAdmitStudent = async (formData) => {
+    try {
+      const res = await apiFetch('/api/students', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: formData.name,
+          email: formData.email,
+          age: formData.age || null,
+          gender: formData.gender || null,
+          phone: formData.phone || null,
+          location: formData.location || null,
+          grade_level: formData.level || null,
+        }),
+      });
+      const contentType = res.headers.get('content-type');
+      const isJson = contentType && contentType.includes('application/json');
+      const data = isJson ? await res.json() : {};
+      if (!res.ok) {
+        const msg = data.message || (isJson ? 'Failed to admit student' : `Server error (${res.status}). Please try again.`);
+        const detail = data.error || (data.errors ? JSON.stringify(data.errors) : null);
+        throw new Error(detail ? `${msg}\n\n${detail}` : msg);
+      }
+      if (!data.student) throw new Error('Invalid response from server.');
+      setAdmissionsStudents((prev) => [...prev, data.student]);
+      setShowAdmissionModal(false);
+    } catch (err) {
+      const msg = err.message || 'Could not save student right now. Please try again.';
+      alert(msg);
+    }
+  };
+
+  const handleDeleteStudent = async (id) => {
+    if (!confirm('Remove this student from the registry?')) return;
+    try {
+      const res = await apiFetch(`/api/students/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(friendlyStatusMessage(res.status, 'Delete failed'));
+      setAdmissionsStudents((prev) => prev.filter((s) => s.id !== id));
+    } catch (err) {
+      alert(err?.message || 'Could not delete student.');
+    }
+  };
+
+  const handleAddCourse = (newCourse) => {
+    setCourses([...courses, newCourse]);
+    setShowCurriculumModal(false);
+  };
+
+  const handleDeleteCourse = (courseId) => {
+    setCourses(courses.filter(c => c.id !== courseId));
+  };
+
+  const renderContent = () => {
+    if (userRole === 'student') {
+      switch (activeTab) {
+        case 'dashboard':
+          return (
+            <StudentDashboard
+              moodleUserId={currentUser?.moodle_user_id}
+              studentName={currentUser?.name}
+            />
+          );
+        case 'curriculum':
+        case 'moodle':
+          return <AdminMoodleSync lockedMoodleUserId={currentUser?.moodle_user_id} />;
+        default:
+          return (
+            <div className="flex flex-col items-center justify-center h-64 text-gray-500">
+              <AlertCircle size={48} className="mb-4" />
+              <p>Module "{activeTab}" is unavailable for student role.</p>
+            </div>
+          );
+      }
+    }
+
+    switch (activeTab) {
+      case 'dashboard':
+        return <Dashboard role={userRole} />;
+      case 'registration':
+        return <StudentRegistration courses={courses} />;
+      case 'roster':
+        return <FacultyRoster students={students} />;
+      case 'admissions':
+        return (
+          <AdmissionsModule 
+            students={admissionsStudents}
+            loading={admissionsLoading}
+            onOpenModal={() => setShowAdmissionModal(true)} 
+            onViewRecord={(student) => setSelectedStudent({ ...student, level: student.grade_level || student.level, balance: student.balance ?? 0 })}
+            onDeleteStudent={handleDeleteStudent}
+          />
+        );
+      case 'curriculum':
+        return (
+          <CurriculumModule />
+        );
+      case 'moodle':
+        return <AdminMoodleSync />;
+      default:
+        return (
+          <div className="flex flex-col items-center justify-center h-64 text-gray-500">
+            <AlertCircle size={48} className="mb-4" />
+            <p>Module "{activeTab}" is currently under development.</p>
+          </div>
+        );
+    }
+  };
+
+  if (!isLoggedIn) {
+    return (
+      <Routes>
+        <Route path="/" element={<LandingLogin onLogin={handleLogin} />} />
+        <Route path="/login" element={<LandingLogin onLogin={handleLogin} />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    );
+  }
+
+  if (pathname === '' || pathname === 'login') {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex text-slate-900 font-sans">
+      {/* Sidebar */}
+      <div className="w-64 bg-indigo-950 text-white flex flex-col shrink-0">
+        <div className="p-6 border-b border-indigo-900">
+          <h1 className="text-2xl font-bold tracking-tight text-white">SIS</h1>
+          <p className="text-indigo-400 text-xs uppercase tracking-widest mt-1 font-semibold">Student Information System</p>
+        </div>
+        
+        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+          {menuItems[userRole].map((item) => (
+            <NavLink
+              key={item.id}
+              to={`/${item.id}`}
+              className={({ isActive }) =>
+                `w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all ${
+                  isActive ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-950/50' : 'text-indigo-300 hover:bg-indigo-900 hover:text-white'
+                }`
+              }
+            >
+              <item.icon size={20} />
+              <span className="font-medium">{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
+
+        <div className="p-4 border-t border-indigo-900">
+          <div className="flex items-center space-x-3 mb-4 px-4 text-sm">
+            <UserCircle size={20} className="text-indigo-400" />
+            <div className="truncate">
+              <p className="text-[10px] text-indigo-500 font-bold uppercase mb-1">Signed in as</p>
+              <p className="text-white text-sm font-semibold">{currentUser?.name || 'User'}</p>
+              {(currentUser?.roles || []).length > 1 && (
+                <select
+                  value={userRole}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setUserRole(next);
+                    if (typeof window !== 'undefined') {
+                      window.localStorage.setItem(SIS_ACTIVE_ROLE_KEY, next);
+                    }
+                  }}
+                  className="mt-2 w-full bg-indigo-900 border border-indigo-700 rounded text-[11px] px-2 py-1 text-indigo-100"
+                >
+                  {((currentUser?.roles || []).filter((r) => SIS_ALLOWED_ROLES.includes(r))).map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={handleLogout}
+            className="w-full flex items-center space-x-3 px-4 py-3 text-indigo-400 hover:text-white hover:bg-indigo-900 rounded-xl transition-colors"
+          >
+            <LogOut size={18} />
+            <span className="text-sm font-medium">Logout</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col h-screen overflow-hidden">
+        <header className="h-16 bg-white border-b flex items-center justify-between px-8 shrink-0">
+          <div className="flex items-center text-gray-400 space-x-2">
+            <span className="capitalize text-[10px] font-black tracking-widest bg-gray-100 px-2 py-1 rounded text-gray-500">{userRole}</span>
+            <span className="text-gray-300">/</span>
+            <span className="text-gray-900 font-semibold capitalize">{activeTab.replace('-', ' ')}</span>
+          </div>
+          <div className="flex items-center space-x-4">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
+              <input 
+                type="text" 
+                placeholder="Search students, modules..." 
+                className="pl-9 pr-4 py-2 border border-gray-100 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 w-64 bg-gray-50 transition-all focus:bg-white"
+              />
+            </div>
+            <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-xs">
+              {userRole[0].toUpperCase()}
+            </div>
+          </div>
+        </header>
+
+        <main className="p-8 overflow-y-auto flex-1">
+          {renderContent()}
+        </main>
+      </div>
+
+      {/* Modals */}
+      {showAdmissionModal && (
+        <AdmissionFormModal 
+          onClose={() => setShowAdmissionModal(false)} 
+          onSubmit={handleAdmitStudent} 
+        />
+      )}
+      {showCurriculumModal && (
+        <CourseFormModal 
+          onClose={() => setShowCurriculumModal(false)} 
+          onSubmit={handleAddCourse} 
+        />
+      )}
+      {selectedStudent && (
+        <StudentProfileModal 
+          student={selectedStudent} 
+          onClose={() => setSelectedStudent(null)} 
+        />
+      )}
+    </div>
+  );
+};
+
+// --- SUB-COMPONENTS ---
+
+const Dashboard = ({ role }) => {
+  const [loading, setLoading] = useState(role === 'admin');
+  const [error, setError] = useState(null);
+  const [gradeLevels, setGradeLevels] = useState(null);
+  const [totalCourses, setTotalCourses] = useState(null);
+  const [totalMoodleStudents, setTotalMoodleStudents] = useState(null);
+  const [moodleOk, setMoodleOk] = useState(null);
+  const [studentsByGrade, setStudentsByGrade] = useState({});
+  const [chartReady, setChartReady] = useState(false);
+  const [lastGradeFetch, setLastGradeFetch] = useState(() => {
+    if (typeof window === 'undefined') return null;
+    return window.localStorage.getItem('sis_last_grade_fetch');
+  });
+
+  useEffect(() => {
+    if (role !== 'admin') return;
+
+    let cancelled = false;
+    const load = (opts = {}) => {
+      setLoading(true);
+      setError(null);
+      setChartReady(false);
+
+      const metricsUrl = opts.refresh
+        ? '/api/moodle/overview-metrics?refresh=1'
+        : '/api/moodle/overview-metrics';
+
+      apiFetch(metricsUrl)
+        .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Failed overview metrics'))))
+        .then((metrics) => {
+          if (cancelled) return;
+          const totalCats =
+            typeof metrics.total_categories === 'number' ? metrics.total_categories : null;
+          const totalCoursesVal =
+            typeof metrics.total_courses === 'number' ? metrics.total_courses : null;
+          const totalStudentsVal =
+            typeof metrics.total_students === 'number' ? metrics.total_students : null;
+
+          setGradeLevels(totalCats);
+          setTotalCourses(totalCoursesVal);
+          setTotalMoodleStudents(totalStudentsVal);
+
+          const perCat = Array.isArray(metrics.students_per_category)
+            ? metrics.students_per_category
+            : [];
+          const counts = {};
+          perCat.forEach((row) => {
+            const name = row.category_name || `Category ${row.category_id}`;
+            const c = typeof row.student_count === 'number' ? row.student_count : 0;
+            counts[name] = c;
+          });
+          setStudentsByGrade(counts);
+
+          setMoodleOk(true);
+          setChartReady(true);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setMoodleOk(false);
+          setError(
+            'Could not load live stats from DNEC EthioEducation LMS. Connection may be down.'
+          );
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    };
+
+    load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [role]);
+
+  // Non-admin roles keep a simple static dashboard for now.
+  if (role !== 'admin') {
+    const stats = {
+      student: [
+        { label: 'Attendance', value: '94%', icon: CheckCircle, color: 'text-blue-600', bg: 'bg-blue-50' },
+        { label: 'Classes Completed', value: '8', icon: BookOpen, color: 'text-green-600', bg: 'bg-green-50' },
+        { label: 'Fees Due', value: '1,200 ETB', icon: CreditCard, color: 'text-red-600', bg: 'bg-red-50' },
+      ],
+      faculty: [
+        { label: 'Active Classes', value: '4', icon: BookOpen, color: 'text-blue-600', bg: 'bg-blue-50' },
+        { label: 'Total Students', value: '128', icon: Users, color: 'text-green-600', bg: 'bg-green-50' },
+        { label: 'Pending Grades', value: '12', icon: FileText, color: 'text-orange-600', bg: 'bg-orange-50' },
+      ],
+    };
+
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {stats[role].map((s, i) => (
+            <div key={i} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+              <div className="flex items-center justify-between mb-4">
+                <div className={`p-3 rounded-xl ${s.bg}`}>
+                  <s.icon className={s.color} size={24} />
+                </div>
+              </div>
+              <h3 className="text-gray-500 text-sm font-medium">{s.label}</h3>
+              <p className="text-2xl font-bold text-gray-900 mt-1">{s.value}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const formattedLastFetch =
+    lastGradeFetch && !Number.isNaN(Date.parse(lastGradeFetch))
+      ? new Date(lastGradeFetch).toLocaleString()
+      : null;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-gray-900">Dashboard</h2>
+          <p className="text-sm text-gray-500">At-a-glance overview for administrators.</p>
+        </div>
+        <div className="flex items-center gap-3">
+          {loading && (
+            <span className="text-xs font-medium text-gray-400">Loading live stats…</span>
+          )}
+          <button
+            type="button"
+            onClick={async () => {
+              // Re-run the effect body with refresh flag via a small helper.
+              // We can't directly call the effect function, so we trigger a manual fetch here.
+              let cancelled = false;
+              setLoading(true);
+              setError(null);
+              setChartReady(false);
+              const metricsUrl = '/api/moodle/overview-metrics?refresh=1';
+              try {
+                const metricsRes = await apiFetch(metricsUrl);
+                if (!metricsRes.ok) {
+                  throw new Error('Failed to refresh dashboard stats');
+                }
+                const metrics = await metricsRes.json();
+                if (cancelled) return;
+                const totalCats =
+                  typeof metrics.total_categories === 'number' ? metrics.total_categories : null;
+                const totalCoursesVal =
+                  typeof metrics.total_courses === 'number' ? metrics.total_courses : null;
+                const totalStudentsVal =
+                  typeof metrics.total_students === 'number' ? metrics.total_students : null;
+
+                setGradeLevels(totalCats);
+                setTotalCourses(totalCoursesVal);
+                setTotalMoodleStudents(totalStudentsVal);
+
+                const perCat = Array.isArray(metrics.students_per_category)
+                  ? metrics.students_per_category
+                  : [];
+                const counts = {};
+                perCat.forEach((row) => {
+                  const name = row.category_name || `Category ${row.category_id}`;
+                  const c = typeof row.student_count === 'number' ? row.student_count : 0;
+                  counts[name] = c;
+                });
+                setStudentsByGrade(counts);
+
+                setMoodleOk(true);
+                setChartReady(true);
+              } catch {
+                if (!cancelled) {
+                  setMoodleOk(false);
+                  setError(
+                    'Could not refresh stats from DNEC EthioEducation LMS. Connection may be down.'
+                  );
+                }
+              } finally {
+                if (!cancelled) setLoading(false);
+              }
+            }}
+            className="px-3 py-1.5 text-xs font-semibold text-gray-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg border border-gray-200"
+          >
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="bg-red-50 border border-red-100 text-red-700 text-sm px-4 py-3 rounded-2xl">
+          {error}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between mb-3">
+            <div className="p-3 rounded-xl bg-indigo-50">
+              <GraduationCap className="text-indigo-600" size={24} />
+            </div>
+          </div>
+          <h3 className="text-gray-500 text-sm font-medium">Total grade levels (DNEC EthioEducation LMS)</h3>
+          <p className="text-2xl font-bold text-gray-900 mt-1">
+            {gradeLevels !== null ? gradeLevels : '—'}
+          </p>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between mb-3">
+            <div className="p-3 rounded-xl bg-blue-50">
+              <BookOpen className="text-blue-600" size={24} />
+            </div>
+          </div>
+          <h3 className="text-gray-500 text-sm font-medium">Total courses (from DNEC EthioEducation LMS)</h3>
+          <p className="text-2xl font-bold text-gray-900 mt-1">
+            {totalCourses !== null ? totalCourses : '—'}
+          </p>
+          <p className="text-[11px] text-gray-400 mt-1">Across all Moodle categories.</p>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between mb-3">
+            <div className="p-3 rounded-xl bg-emerald-50">
+              <Users className="text-emerald-600" size={24} />
+            </div>
+          </div>
+          <h3 className="text-gray-500 text-sm font-medium">Students in DNEC EthioEducation LMS</h3>
+          <p className="text-2xl font-bold text-gray-900 mt-1">
+            {totalMoodleStudents !== null ? totalMoodleStudents : '—'}
+          </p>
+          <p className="text-[11px] text-gray-400 mt-1">
+            Unique enrolled users across all LMS courses.
+          </p>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between mb-3">
+            <div className="p-3 rounded-xl bg-amber-50">
+              <FileText className="text-amber-600" size={24} />
+            </div>
+          </div>
+          <h3 className="text-gray-500 text-sm font-medium">Last grade fetch (DNEC EthioEducation LMS)</h3>
+          <p className="text-sm font-semibold text-gray-900 mt-1">
+            {formattedLastFetch || 'No grade fetch recorded yet'}
+          </p>
+          <p className="text-[11px] text-gray-400 mt-1">
+            Updated whenever grades are fetched in the Moodle Sync screen.
+          </p>
+        </div>
+      </div>
+
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <span
+              className={`inline-flex h-2 w-2 rounded-full ${
+                moodleOk === null ? 'bg-gray-300' : moodleOk ? 'bg-green-500' : 'bg-red-500'
+              }`}
+            />
+            <h3 className="text-sm font-semibold text-gray-900">Connection to DNEC EthioEducation LMS</h3>
+          </div>
+        </div>
+        <p className="text-sm text-gray-600">
+          {moodleOk === null && 'Checking…'}
+          {moodleOk === true && 'OK – DNEC EthioEducation LMS categories endpoint is responding.'}
+          {moodleOk === false &&
+            'Error – SIS could not reach DNEC EthioEducation LMS via the categories API. Check token, URL, or network.'}
+        </p>
+      </div>
+
+      {Object.keys(studentsByGrade).length > 0 && (
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <h3 className="text-sm font-semibold text-gray-900 mb-4">
+            Students per grade level (SIS)
+          </h3>
+          {(() => {
+            const entries = Object.entries(studentsByGrade).sort(
+              (a, b) => Number(b[1]) - Number(a[1])
+            );
+            const max =
+              entries.reduce((m, [, v]) => {
+                const num = Number(v) || 0;
+                return num > m ? num : m;
+              }, 0) || 1;
+            return (
+              <div className="space-y-2">
+                {entries.map(([grade, count]) => {
+                  const targetWidth = Math.max(6, (Number(count) / max) * 100);
+                  const width = chartReady ? targetWidth : 0;
+                  return (
+                    <div
+                      key={grade}
+                      className="flex items-center gap-3 text-xs px-2 py-1 rounded-xl hover:bg-indigo-50/60 transition-colors"
+                    >
+                      <div className="w-32 truncate text-gray-600 font-semibold">{grade}</div>
+                      <div className="flex-1 h-3 rounded-full bg-gray-100 overflow-hidden">
+                        <div
+                          className="h-3 rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 transition-all duration-700 ease-out"
+                          style={{ width: `${width}%` }}
+                        />
+                      </div>
+                      <div className="w-8 text-right text-gray-800 font-semibold">{count}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const AdmissionsModule = ({ students, loading, onOpenModal, onViewRecord, onDeleteStudent }) => {
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
+  const totalPages = Math.max(1, Math.ceil(students.length / pageSize));
+  const pagedStudents = React.useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return students.slice(start, start + pageSize);
+  }, [students, page]);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h3 className="text-xl font-bold text-gray-900">Student Admissions</h3>
+          <p className="text-sm text-gray-500">System registry for K-12 and Language School enrollment</p>
+        </div>
+        <button 
+          onClick={onOpenModal}
+          className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all flex items-center shadow-lg shadow-indigo-200"
+        >
+          <UserPlus size={18} className="mr-2" />
+          Admit Student
+        </button>
+      </div>
+
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+        <table className="w-full text-left">
+          <thead className="bg-gray-50 text-gray-400 text-[10px] uppercase font-bold tracking-widest border-b">
+            <tr>
+              <th className="px-6 py-4">Student ID</th>
+              <th className="px-6 py-4">Full Name</th>
+              <th className="px-6 py-4">Grade / Level</th>
+              <th className="px-6 py-4">Status</th>
+              <th className="px-6 py-4 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y text-sm">
+            {loading ? (
+              <tr>
+                <td colSpan="5" className="px-6 py-12 text-center text-gray-400">Loading…</td>
+              </tr>
+            ) : students.length > 0 ? (
+              pagedStudents.map((student) => (
+                <tr key={student.id} className="hover:bg-gray-50 transition-colors group">
+                  <td className="px-6 py-4 font-mono text-xs font-bold text-indigo-600">{student.sis_id || student.id}</td>
+                  <td className="px-6 py-4">
+                    <div>
+                      <p className="font-bold text-gray-900">{student.name}</p>
+                      <p className="text-xs text-gray-400">{student.email}</p>
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 font-medium text-gray-600">{student.grade_level || student.level || '—'}</td>
+                  <td className="px-6 py-4">
+                    <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wide ${
+                      (student.status || 'Active') === 'Active' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'
+                    }`}>
+                      {student.status || 'Active'}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-right space-x-2">
+                    <button 
+                      onClick={() => onViewRecord(student)}
+                      className="text-indigo-600 hover:text-white font-bold text-xs px-3 py-1.5 hover:bg-indigo-600 border border-indigo-100 rounded-lg transition-all"
+                    >
+                      View Record
+                    </button>
+                    <button 
+                      onClick={() => onDeleteStudent(student.id)}
+                      className="text-gray-400 hover:text-red-600 p-2 hover:bg-red-50 rounded-lg transition-all"
+                      title="Delete Student"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan="5" className="px-6 py-12 text-center text-gray-400 italic">No student records found.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {!loading && students.length > pageSize && (
+        <div className="flex items-center justify-between px-1">
+          <p className="text-xs text-gray-500">
+            Showing {(page - 1) * pageSize + 1} - {Math.min(page * pageSize, students.length)} of {students.length}
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page === 1}
+              className="px-3 py-1.5 text-xs font-semibold text-gray-600 border border-gray-200 rounded-lg disabled:opacity-50"
+            >
+              Prev
+            </button>
+            <span className="text-xs text-gray-500">Page {page} / {totalPages}</span>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page === totalPages}
+              className="px-3 py-1.5 text-xs font-semibold text-gray-600 border border-gray-200 rounded-lg disabled:opacity-50"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const StudentProfileModal = ({ student, onClose }) => {
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-indigo-950/40 backdrop-blur-sm p-4">
+      <div className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+        <div className="p-6 border-b flex justify-between items-center bg-indigo-900 text-white">
+          <div className="flex items-center space-x-4">
+            <div className="w-14 h-14 rounded-2xl bg-indigo-700 border-2 border-indigo-500/30 flex items-center justify-center font-bold text-2xl">
+              {student.name.charAt(0)}
+            </div>
+            <div>
+              <h4 className="text-xl font-bold">{student.name}</h4>
+              <p className="text-xs text-indigo-300 font-mono tracking-wider">{student.sis_id || student.id} • {student.level || student.grade_level}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+            <X size={24} />
+          </button>
+        </div>
+        
+        <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-8 bg-white">
+          {/* Identity Section */}
+          <div className="space-y-6">
+            <h5 className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-500 border-b pb-2">Personal Information</h5>
+            
+            <div className="grid grid-cols-2 gap-4">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-gray-50 rounded-lg"><Calendar size={16} className="text-gray-400" /></div>
+                <div>
+                  <p className="text-[10px] text-gray-400 font-bold uppercase">Age</p>
+                  <p className="text-sm font-semibold text-gray-900">{student.age || 'N/A'} Years</p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-gray-50 rounded-lg"><User size={16} className="text-gray-400" /></div>
+                <div>
+                  <p className="text-[10px] text-gray-400 font-bold uppercase">Gender</p>
+                  <p className="text-sm font-semibold text-gray-900">{student.gender || 'N/A'}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-3">
+              <div className="p-2 bg-gray-50 rounded-lg"><Phone size={16} className="text-gray-400" /></div>
+              <div>
+                <p className="text-[10px] text-gray-400 font-bold uppercase">Phone Number</p>
+                <p className="text-sm font-semibold text-gray-900">{student.phone || 'Not Provided'}</p>
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-3">
+              <div className="p-2 bg-gray-50 rounded-lg"><MapPin size={16} className="text-gray-400" /></div>
+              <div>
+                <p className="text-[10px] text-gray-400 font-bold uppercase">Residential Location</p>
+                <p className="text-sm font-semibold text-gray-900">{student.location || 'Unknown'}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Academic/Financial Section */}
+          <div className="space-y-6">
+            <h5 className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-500 border-b pb-2">Academic Standing</h5>
+            
+            <div>
+              <p className="text-[10px] text-gray-400 font-bold uppercase mb-1">Status</p>
+              <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                student.status === 'Active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+              }`}>
+                {student.status}
+              </span>
+            </div>
+
+            <div>
+              <p className="text-[10px] text-gray-400 font-bold uppercase mb-1">Financial Balance</p>
+              <p className={`text-xl font-black ${student.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                {student.balance.toLocaleString()} <span className="text-sm font-normal text-gray-400">ETB</span>
+              </p>
+              <p className="text-[10px] text-gray-400 mt-1 italic">Last payment sync: Today</p>
+            </div>
+
+            <div className="bg-indigo-50 rounded-2xl p-4 flex items-start space-x-3 border border-indigo-100/50">
+              <Info size={18} className="text-indigo-600 mt-0.5 shrink-0" />
+              <p className="text-[11px] text-indigo-700/70 leading-relaxed font-medium">
+                This student is synchronized with the <strong>DNEC EthioEducation LMS</strong> via API. Changes to level or status are reflected in the learning portal immediately.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6 bg-gray-50 border-t flex justify-end items-center space-x-4">
+          <button 
+            className="text-indigo-600 text-sm font-bold hover:bg-indigo-100 px-4 py-2 rounded-xl transition-colors"
+          >
+            Edit Profile
+          </button>
+          <button 
+            onClick={onClose}
+            className="px-8 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
+          >
+            Close Record
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const CurriculumModule = () => {
+  const [loadingCats, setLoadingCats] = useState(false);
+  const [catError, setCatError] = useState(null);
+  const [categories, setCategories] = useState([]);
+  const [selectedCategoryId, setSelectedCategoryId] = useState('');
+
+  const [loadingCourses, setLoadingCourses] = useState(false);
+  const [courseError, setCourseError] = useState(null);
+  const [moodleCourses, setMoodleCourses] = useState([]);
+  const [selectedCourse, setSelectedCourse] = useState(null);
+
+  const [loadingStudents, setLoadingStudents] = useState(false);
+  const [studentError, setStudentError] = useState(null);
+  const [courseStudents, setCourseStudents] = useState([]);
+  const [studentsFetchedAt, setStudentsFetchedAt] = useState(null);
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareSelected, setCompareSelected] = useState({});
+  const [detailCourse, setDetailCourse] = useState(null);
+  const [detailItems, setDetailItems] = useState([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState(null);
+
+  const [studentSearch, setStudentSearch] = useState('');
+  const [sortDir, setSortDir] = useState('desc');
+  const [studentsPage, setStudentsPage] = useState(1);
+
+  useEffect(() => {
+    let alive = true;
+    setLoadingCats(true);
+    setCatError(null);
+    apiFetch('/api/moodle/categories')
+      .then((res) => res.ok ? res.json() : Promise.reject(res))
+      .then((data) => {
+        if (!alive) return;
+        const cats = Array.isArray(data.categories) ? data.categories : [];
+        // Prefer grade-like categories first.
+        const sorted = [...cats].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+        setCategories(sorted);
+      })
+      .catch((res) => alive && setCatError(
+        friendlyStatusMessage(
+          res?.status,
+          'Could not load grade categories right now. Please try again.'
+        )
+      ))
+      .finally(() => alive && setLoadingCats(false));
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedCategoryId) {
+      setMoodleCourses([]);
+      setSelectedCourse(null);
+      setCourseStudents([]);
+      return;
+    }
+    let alive = true;
+    setLoadingCourses(true);
+    setCourseError(null);
+    setSelectedCourse(null);
+    setCourseStudents([]);
+    apiFetch(`/api/moodle/courses/${selectedCategoryId}`)
+      .then((res) => res.ok ? res.json() : Promise.reject(res))
+      .then((data) => {
+        if (!alive) return;
+        const list = Array.isArray(data.courses) ? data.courses : [];
+        setMoodleCourses(list);
+      })
+      .catch((res) => alive && setCourseError(
+        friendlyStatusMessage(res?.status, 'Could not load courses for this grade/level.')
+      ))
+      .finally(() => alive && setLoadingCourses(false));
+    return () => { alive = false; };
+  }, [selectedCategoryId]);
+
+  const loadCourseStudents = async (course, opts = {}) => {
+    setSelectedCourse(course);
+    setLoadingStudents(true);
+    setStudentError(null);
+    setCourseStudents([]);
+    setStudentsFetchedAt(null);
+    setCompareSelected({});
+    setDetailCourse(null);
+    setDetailItems([]);
+    setDetailError(null);
+    try {
+      const refresh = !!opts.refresh;
+      const url = refresh
+        ? `/api/moodle/course-students/${course.id}?refresh=1`
+        : `/api/moodle/course-students/${course.id}`;
+      const res = await apiFetch(url);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.message || friendlyStatusMessage(res.status, 'Could not load course students'));
+      }
+      setCourseStudents(Array.isArray(data.students) ? data.students : []);
+      setStudentsFetchedAt(data.fetched_at || null);
+    } catch (e) {
+      setStudentError(e.message || 'Could not load course students');
+    } finally {
+      setLoadingStudents(false);
+    }
+  };
+
+  const handleViewStudentGrades = (studentRow) => {
+    if (!selectedCourse?.id) return;
+    if (!studentRow?.moodle_user_id) return;
+
+    const courseForModal = {
+      course_id: selectedCourse.id,
+      course_name: selectedCourse.fullname || selectedCourse.shortname || `Course ${selectedCourse.id}`,
+      student_name: studentRow.fullname || studentRow.email || `Student ${studentRow.moodle_user_id}`,
+    };
+
+    setDetailCourse(courseForModal);
+    setDetailItems([]);
+    setDetailError(null);
+    setDetailLoading(true);
+
+    apiFetch(`/api/moodle/course-grades-direct/${studentRow.moodle_user_id}/${selectedCourse.id}`)
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (ok) setDetailItems(data.items || []);
+        else setDetailError(data.message || 'Could not load detailed grades.');
+      })
+      .catch((res) => setDetailError(friendlyStatusMessage(res?.status, 'Request failed. Please try again.')))
+      .finally(() => setDetailLoading(false));
+  };
+
+  const toggleCompare = () => setCompareMode((v) => !v);
+
+  const toggleStudentSelect = (moodleUserId) => {
+    setCompareSelected((prev) => ({
+      ...prev,
+      [moodleUserId]: !prev[moodleUserId],
+    }));
+  };
+
+  const selectedForCompare = courseStudents.filter((s) => compareSelected[s.moodle_user_id]);
+  const leaderboard = [...selectedForCompare].sort((a, b) => {
+    const pa = a.course_total_percentage;
+    const pb = b.course_total_percentage;
+    if (pa == null && pb == null) return 0;
+    if (pa == null) return 1;
+    if (pb == null) return -1;
+    return pb - pa;
+  });
+
+  const filteredStudents = courseStudents.filter((s) => {
+    if (!studentSearch.trim()) return true;
+    const q = studentSearch.toLowerCase();
+    return (
+      (s.fullname || '').toLowerCase().includes(q) ||
+      (s.email || '').toLowerCase().includes(q)
+    );
+  });
+
+  const sortedStudents = [...filteredStudents].sort((a, b) => {
+    const pa = a.course_total_percentage;
+    const pb = b.course_total_percentage;
+    if (pa == null && pb == null) return 0;
+    if (pa == null) return sortDir === 'desc' ? 1 : -1;
+    if (pb == null) return sortDir === 'desc' ? -1 : 1;
+    return sortDir === 'desc' ? pb - pa : pa - pb;
+  });
+  const studentsPageSize = 25;
+  const studentsTotalPages = Math.max(1, Math.ceil(sortedStudents.length / studentsPageSize));
+  const pagedSortedStudents = React.useMemo(() => {
+    const start = (studentsPage - 1) * studentsPageSize;
+    return sortedStudents.slice(start, start + studentsPageSize);
+  }, [sortedStudents, studentsPage]);
+
+  useEffect(() => {
+    setStudentsPage(1);
+  }, [selectedCourse?.id, studentSearch, sortDir]);
+
+  useEffect(() => {
+    if (studentsPage > studentsTotalPages) setStudentsPage(studentsTotalPages);
+  }, [studentsPage, studentsTotalPages]);
+
+  const nonNullStudents = courseStudents.filter((s) => s.course_total_percentage != null);
+  const studentCount = courseStudents.length;
+  const avgPct =
+    nonNullStudents.length > 0
+      ? nonNullStudents.reduce((sum, s) => sum + (s.course_total_percentage || 0), 0) /
+        nonNullStudents.length
+      : null;
+  const minPct =
+    nonNullStudents.length > 0
+      ? nonNullStudents.reduce(
+          (min, s) =>
+            s.course_total_percentage != null && s.course_total_percentage < min
+              ? s.course_total_percentage
+              : min,
+          nonNullStudents[0].course_total_percentage
+        )
+      : null;
+  const maxPct =
+    nonNullStudents.length > 0
+      ? nonNullStudents.reduce(
+          (max, s) =>
+            s.course_total_percentage != null && s.course_total_percentage > max
+              ? s.course_total_percentage
+              : max,
+          nonNullStudents[0].course_total_percentage
+        )
+      : null;
+
+  const bucketsConfig = [
+    { id: '0-50', label: '0–50', min: 0, max: 50 },
+    { id: '50-60', label: '50–60', min: 50, max: 60 },
+    { id: '60-70', label: '60–70', min: 60, max: 70 },
+    { id: '70-80', label: '70–80', min: 70, max: 80 },
+    { id: '80-90', label: '80–90', min: 80, max: 90 },
+    { id: '90-100', label: '90–100', min: 90, max: 101 },
+  ];
+
+  const bucketCounts = bucketsConfig.map((bucket) => {
+    const count = nonNullStudents.filter((s) => {
+      const p = s.course_total_percentage;
+      return p != null && p >= bucket.min && p < bucket.max;
+    }).length;
+    return { ...bucket, count };
+  });
+
+  const maxBucketCount = bucketCounts.reduce((m, b) => (b.count > m ? b.count : m), 0) || 1;
+
+  const globalLeaderboard = [...nonNullStudents].sort(
+    (a, b) => b.course_total_percentage - a.course_total_percentage
+  );
+  const top3 = globalLeaderboard.slice(0, 3);
+  const lowest3 = [...globalLeaderboard].slice(-3).reverse();
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h3 className="text-xl font-bold text-gray-900">Grades Explorer</h3>
+          <p className="text-sm text-gray-500">Grade level → Course → Students &amp; DNEC EthioEducation LMS grades</p>
+        </div>
+        <button
+          onClick={toggleCompare}
+          className={`px-4 py-2 rounded-xl text-sm font-bold border transition-all ${
+            compareMode ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50'
+          }`}
+        >
+          {compareMode ? 'Compare: ON' : 'Compare students'}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="font-bold text-gray-800">1) Select Grade/Level</h4>
+            {loadingCats && <span className="text-xs text-gray-400">Loading…</span>}
+          </div>
+          {catError ? (
+            <p className="text-sm text-red-600">{catError}</p>
+          ) : (
+            <select
+              value={selectedCategoryId}
+              onChange={(e) => setSelectedCategoryId(e.target.value)}
+              className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"
+            >
+              <option value="">— Select —</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="font-bold text-gray-800">2) Select Course</h4>
+            {loadingCourses && <span className="text-xs text-gray-400">Loading…</span>}
+          </div>
+          {!selectedCategoryId ? (
+            <p className="text-sm text-gray-500">Pick a Grade/Level first.</p>
+          ) : courseError ? (
+            <p className="text-sm text-red-600">{courseError}</p>
+          ) : moodleCourses.length === 0 ? (
+            <p className="text-sm text-gray-500">No courses found in this category.</p>
+          ) : (
+            <div className="space-y-2 max-h-[55vh] overflow-y-auto pr-1">
+              {moodleCourses.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => loadCourseStudents(c)}
+                  className={`w-full text-left px-4 py-3 rounded-xl border transition-all ${
+                    selectedCourse?.id === c.id
+                      ? 'border-indigo-300 bg-indigo-50'
+                      : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  <div className="text-sm font-bold text-gray-900">{c.fullname || c.shortname || `Course ${c.id}`}</div>
+                  <div className="text-xs text-gray-500">Course ID: {c.id}</div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h4 className="font-bold text-gray-800">
+                3) Students &amp; Grades {selectedCourse ? `• ${selectedCourse.fullname || selectedCourse.shortname || `Course ${selectedCourse.id}`}` : ''}
+              </h4>
+              {selectedCourse && (
+                <p className="text-xs text-gray-500 mt-1">
+                  Students: {studentCount}{' '}
+                  {avgPct != null && `• Course average: ${avgPct.toFixed(1)}%`}{' '}
+                  {maxPct != null && `• Highest: ${maxPct.toFixed(1)}%`}{' '}
+                  {minPct != null && `• Lowest: ${minPct.toFixed(1)}%`}
+                </p>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              {selectedCourse && (
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={studentSearch}
+                    onChange={(e) => setStudentSearch(e.target.value)}
+                    placeholder="Search name or email..."
+                    className="pl-3 pr-3 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-gray-50 focus:bg-white"
+                  />
+                </div>
+              )}
+              {selectedCourse && (
+                <button
+                  type="button"
+                  onClick={() => loadCourseStudents(selectedCourse, { refresh: true })}
+                  disabled={loadingStudents}
+                  className="px-2 py-1.5 text-xs font-semibold text-gray-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg border border-gray-200 disabled:opacity-50 disabled:pointer-events-none"
+                  title="Refresh from Moodle (bypass cache)"
+                >
+                  Refresh
+                </button>
+              )}
+              {loadingStudents && <span className="text-xs text-gray-400">Loading…</span>}
+              {courseStudents.length > 0 && selectedCourse && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const courseName = selectedCourse.fullname || selectedCourse.shortname || `course-${selectedCourse.id}`;
+                    const rows = courseStudents.map((s) => ({
+                      Name: s.fullname ?? '',
+                      Email: s.email ?? '',
+                      'Course Total %': s.course_total_percentage != null ? s.course_total_percentage : '',
+                    }));
+                    const safeName = courseName.replace(/[^\w\s-]/g, '');
+                    downloadCsv(`course-${selectedCourse.id}-grades.csv`, rows);
+                  }}
+                  className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-lg border border-indigo-200"
+                >
+                  <Download size={14} />
+                  Export CSV
+                </button>
+              )}
+            </div>
+          </div>
+          {!selectedCourse ? (
+            <p className="text-sm text-gray-500">Select a course to see enrolled students.</p>
+          ) : studentError ? (
+            <p className="text-sm text-red-600">{studentError}</p>
+          ) : courseStudents.length === 0 ? (
+            <p className="text-sm text-gray-500">No enrolled students found for this course (according to DNEC EthioEducation LMS).</p>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-gray-400 border-b pb-2">
+                <div className="flex-1 flex items-center gap-3">
+                  <span className="w-6 text-center">#</span>
+                  <span className="flex-1">Student Name</span>
+                  <span className="w-40">Email</span>
+                </div>
+                <div className="flex items-center gap-4 pr-1">
+                  <button
+                    type="button"
+                    onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
+                    className="flex items-center gap-1 text-gray-500 hover:text-indigo-600"
+                  >
+                    <span>Course Total %</span>
+                    <span>{sortDir === 'desc' ? '↓' : '↑'}</span>
+                  </button>
+                  <span className="w-16 text-right">Action</span>
+                </div>
+              </div>
+              <div className="space-y-1 max-h-[45vh] overflow-y-auto pr-1">
+                {pagedSortedStudents.map((s, idx) => (
+                  <div
+                    key={`${s.moodle_user_id}-${idx}`}
+                    className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0 hover:bg-gray-50 rounded-lg px-2"
+                  >
+                    <div className="flex-1 flex items-center gap-3 min-w-0">
+                      <span className="w-6 text-center text-xs font-mono text-gray-400">
+                        {(studentsPage - 1) * studentsPageSize + idx + 1}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-semibold text-gray-900 truncate">
+                          {s.fullname}
+                        </div>
+                        <div className="text-xs text-gray-500 truncate">
+                          {s.email || `Moodle user ${s.moodle_user_id}`}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {compareMode && (
+                        <input
+                          type="checkbox"
+                          checked={!!compareSelected[s.moodle_user_id]}
+                          onChange={() => toggleStudentSelect(s.moodle_user_id)}
+                          className="h-4 w-4 accent-indigo-600"
+                          title="Select for comparison"
+                        />
+                      )}
+                      <div className="text-sm font-bold text-gray-800 w-16 text-right">
+                        {s.course_total_percentage != null ? `${s.course_total_percentage}%` : '—'}
+                      </div>
+                      <button
+                        onClick={() => handleViewStudentGrades(s)}
+                        className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 whitespace-nowrap"
+                        title="View detailed grades"
+                      >
+                        View grades
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {sortedStudents.length > studentsPageSize && (
+                <div className="flex items-center justify-between pt-2">
+                  <p className="text-xs text-gray-500">
+                    Showing {(studentsPage - 1) * studentsPageSize + 1} - {Math.min(studentsPage * studentsPageSize, sortedStudents.length)} of {sortedStudents.length}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setStudentsPage((p) => Math.max(1, p - 1))}
+                      disabled={studentsPage === 1}
+                      className="px-3 py-1.5 text-xs font-semibold text-gray-600 border border-gray-200 rounded-lg disabled:opacity-50"
+                    >
+                      Prev
+                    </button>
+                    <span className="text-xs text-gray-500">Page {studentsPage} / {studentsTotalPages}</span>
+                    <button
+                      type="button"
+                      onClick={() => setStudentsPage((p) => Math.min(studentsTotalPages, p + 1))}
+                      disabled={studentsPage === studentsTotalPages}
+                      className="px-3 py-1.5 text-xs font-semibold text-gray-600 border border-gray-200 rounded-lg disabled:opacity-50"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          <p className="mt-3 text-xs text-gray-400">
+            This list is loaded directly from DNEC EthioEducation LMS enrolments.
+            {studentsFetchedAt ? ` Last updated: ${new Date(studentsFetchedAt).toLocaleString()}.` : ''}
+          </p>
+        </div>
+      </div>
+
+      {selectedCourse && (
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-6">
+            <div className="bg-indigo-50 border border-indigo-100 rounded-2xl p-4">
+              <p className="text-xs font-semibold text-indigo-500 uppercase tracking-widest">Students</p>
+              <p className="text-2xl font-bold text-indigo-900 mt-1">{studentCount}</p>
+            </div>
+            <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4">
+              <p className="text-xs font-semibold text-blue-500 uppercase tracking-widest">Course average</p>
+              <p className="text-2xl font-bold text-blue-900 mt-1">
+                {avgPct != null ? `${avgPct.toFixed(1)}%` : '—'}
+              </p>
+            </div>
+            <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4">
+              <p className="text-xs font-semibold text-emerald-500 uppercase tracking-widest">Highest grade</p>
+              <p className="text-2xl font-bold text-emerald-900 mt-1">
+                {maxPct != null ? `${maxPct.toFixed(1)}%` : '—'}
+              </p>
+            </div>
+            <div className="bg-rose-50 border border-rose-100 rounded-2xl p-4">
+              <p className="text-xs font-semibold text-rose-500 uppercase tracking-widest">Lowest grade</p>
+              <p className="text-2xl font-bold text-rose-900 mt-1">
+                {minPct != null ? `${minPct.toFixed(1)}%` : '—'}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2">
+              <h5 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">
+                Grade distribution
+              </h5>
+              <div className="space-y-2">
+                {bucketCounts.map((bucket) => {
+                  const width =
+                    maxBucketCount > 0 ? Math.max(4, (bucket.count / maxBucketCount) * 100) : 0;
+                  return (
+                    <div key={bucket.id} className="flex items-center gap-3 text-xs">
+                      <div className="w-16 text-gray-500">{bucket.label}</div>
+                      <div className="flex-1 h-3 rounded-full bg-gray-100 overflow-hidden">
+                        <div
+                          className="h-3 rounded-full bg-indigo-500"
+                          style={{ width: `${width}%` }}
+                        />
+                      </div>
+                      <div className="w-6 text-right text-gray-700 font-semibold">
+                        {bucket.count}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <h5 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">
+                  Top 3 students
+                </h5>
+                {top3.length === 0 ? (
+                  <p className="text-xs text-gray-500">No graded students yet.</p>
+                ) : (
+                  <ul className="space-y-1">
+                    {top3.map((s, idx) => (
+                      <li
+                        key={s.moodle_user_id || idx}
+                        className="flex items-center justify-between text-xs bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2"
+                      >
+                        <span className="truncate mr-2">{s.fullname}</span>
+                        <span className="font-bold text-emerald-700">
+                          {s.course_total_percentage != null
+                            ? `${s.course_total_percentage}%`
+                            : '—'}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div>
+                <h5 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">
+                  Needs attention (lowest 3)
+                </h5>
+                {lowest3.length === 0 ? (
+                  <p className="text-xs text-gray-500">No graded students yet.</p>
+                ) : (
+                  <ul className="space-y-1">
+                    {lowest3.map((s, idx) => (
+                      <li
+                        key={s.moodle_user_id || idx}
+                        className="flex items-center justify-between text-xs bg-rose-50 border border-rose-100 rounded-xl px-3 py-2"
+                      >
+                        <span className="truncate mr-2">{s.fullname}</span>
+                        <span className="font-bold text-rose-700">
+                          {s.course_total_percentage != null
+                            ? `${s.course_total_percentage}%`
+                            : '—'}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {compareMode && (
+            <div className="mt-8 border-t pt-6">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h4 className="text-sm font-bold text-gray-900">Comparison (selected only)</h4>
+                  <p className="text-xs text-gray-500">
+                    {selectedCourse.fullname || selectedCourse.shortname || `Course ${selectedCourse.id}`}{' '}
+                    • selected {selectedForCompare.length}
+                  </p>
+                </div>
+              </div>
+
+              {selectedForCompare.length === 0 ? (
+                <p className="text-sm text-gray-500">
+                  Select some students using the checkboxes in the list above.
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <div>
+                    <h5 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">
+                      Leaderboard (by %)
+                    </h5>
+                    <div className="divide-y border rounded-2xl overflow-hidden">
+                      {leaderboard.map((s, i) => (
+                        <div
+                          key={s.moodle_user_id}
+                          className="flex items-center justify-between px-4 py-3 bg-white"
+                        >
+                          <div className="min-w-0 pr-4">
+                            <div className="text-sm font-bold text-gray-900 truncate">
+                              {i + 1}. {s.fullname}
+                            </div>
+                            <div className="text-xs text-gray-500 truncate">
+                              {s.email || `Moodle user ${s.moodle_user_id}`}
+                            </div>
+                          </div>
+                          <div className="text-sm font-extrabold text-indigo-700">
+                            {s.course_total_percentage != null
+                              ? `${s.course_total_percentage}%`
+                              : '—'}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <h5 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">
+                      Milestone Progress
+                    </h5>
+                    <div className="space-y-4">
+                      {leaderboard.map((s) => {
+                        const pct = s.course_total_percentage ?? 0;
+                        const clamped = Math.max(0, Math.min(100, pct));
+                        return (
+                          <div key={s.moodle_user_id} className="border rounded-2xl p-4">
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="text-sm font-bold text-gray-900 truncate pr-4">
+                                {s.fullname}
+                              </div>
+                              <div className="text-sm font-extrabold text-gray-800">
+                                {pct != null ? `${pct}%` : '—'}
+                              </div>
+                            </div>
+                            <div className="relative h-4 rounded-full bg-gray-100 overflow-hidden">
+                              <div
+                                className="absolute left-0 top-0 h-4 bg-indigo-600/20"
+                                style={{ width: `${clamped}%` }}
+                              />
+                              <div
+                                className="absolute top-1/2 -translate-y-1/2"
+                                style={{ left: `calc(${clamped}% - 10px)` }}
+                                title="Progress"
+                              >
+                                <div className="w-5 h-3 rounded-sm bg-indigo-600 shadow" />
+                              </div>
+                            </div>
+                            <div className="mt-2 flex justify-between text-[10px] text-gray-400 font-semibold">
+                              <span>Start</span>
+                              <span>Milestone</span>
+                              <span>Finish</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {detailCourse && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden">
+            <div className="p-4 border-b flex justify-between items-center bg-indigo-900 text-white">
+              <div>
+                <h4 className="text-sm font-bold">
+                  Detailed grades • {detailCourse.course_name}
+                </h4>
+                {detailCourse.student_name && (
+                  <p className="text-indigo-200 text-xs mt-1">Student: {detailCourse.student_name}</p>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {detailItems.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const studentName = detailCourse.student_name ?? '';
+                      const rows = detailItems.map((item) => ({
+                        'Student': studentName,
+                        'Grade item': item.item_name ?? '',
+                        'Weight': item.weight ?? '',
+                        'Grade': item.grade_text ?? '',
+                        'Range': item.range ?? '',
+                        'Percentage': item.percentage ?? '',
+                        'Contribution': item.contribution_to_total ?? '',
+                      }));
+                      const courseSafe = (detailCourse.course_name || 'course').replace(/[^\w\s-]/g, '');
+                      const studentSafe = studentName.replace(/[^\w\s-]/g, '') || 'student';
+                      const date = new Date().toISOString().slice(0, 10);
+                      downloadCsv(`${studentSafe}-grades-detail-${courseSafe}-${date}.csv`, rows);
+                    }}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-semibold"
+                  >
+                    <Download size={12} />
+                    Export CSV
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    setDetailCourse(null);
+                    setDetailItems([]);
+                    setDetailError(null);
+                  }}
+                  className="px-2 py-1 rounded-lg hover:bg-white/10 text-xs font-semibold"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="p-4 max-h-[60vh] overflow-y-auto">
+              {detailLoading ? (
+                <p className="text-gray-500 text-sm">Loading detailed grades…</p>
+              ) : detailError ? (
+                <p className="text-red-600 text-sm">{detailError}</p>
+              ) : detailItems.length === 0 ? (
+                <p className="text-gray-500 text-sm">No detailed items found for this course.</p>
+              ) : (
+                <div className="text-xs md:text-sm">
+                  <div className="grid grid-cols-3 md:grid-cols-7 gap-2 px-2 py-2 border-b text-[10px] md:text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    <div className="col-span-2 md:col-span-2">Grade item</div>
+                    <div className="hidden md:block">Weight</div>
+                    <div>Grade</div>
+                    <div className="hidden md:block">Range</div>
+                    <div className="hidden md:block">Percentage</div>
+                    <div className="hidden md:block text-right">Contribution</div>
+                  </div>
+                  <ul className="divide-y">
+                    {detailItems.map((item, idx) => (
+                      <li
+                        key={idx}
+                        className="py-2 px-2 grid grid-cols-3 md:grid-cols-7 gap-2 items-center"
+                      >
+                        <div className="col-span-2 md:col-span-2 font-medium text-gray-800">
+                          {item.item_name}
+                        </div>
+                        <div className="hidden md:block text-gray-600">
+                          {item.weight || '—'}
+                        </div>
+                        <div className="text-gray-800">
+                          {item.grade_text || '—'}
+                        </div>
+                        <div className="hidden md:block text-gray-600">
+                          {item.range || '—'}
+                        </div>
+                        <div className="hidden md:block text-gray-600">
+                          {item.percentage || '—'}
+                        </div>
+                        <div className="hidden md:block text-right text-gray-800">
+                          {item.contribution_to_total || '—'}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const CourseFormModal = ({ onClose, onSubmit }) => {
+  const [formData, setFormData] = useState({
+    id: '',
+    name: '',
+    level: 'Grade 1',
+    faculty: ''
+  });
+
+  const gradeLevels = [
+    "Kindergarten", "Grade 1", "Grade 2", "Grade 3", "Grade 4", "Grade 5", 
+    "Grade 6", "Grade 7", "Grade 8", "Grade 9", "Grade 10", "Grade 11", 
+    "Grade 12", "Beginner", "Intermediate", "Advanced"
+  ];
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!formData.id || !formData.name) return;
+    onSubmit(formData);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+        <div className="p-6 border-b flex justify-between items-center bg-indigo-900 text-white">
+          <h4 className="text-lg font-bold">Add Curriculum Module</h4>
+          <button onClick={onClose} className="p-1 hover:bg-white/10 rounded-lg transition-colors">
+            <X size={20} />
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-6 space-y-5">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Module Code</label>
+              <input 
+                required
+                type="text" 
+                placeholder="e.g. MATH-G5"
+                value={formData.id}
+                onChange={(e) => setFormData({...formData, id: e.target.value.toUpperCase()})}
+                className="w-full px-4 py-3 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-mono"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Target Level</label>
+              <select 
+                value={formData.level}
+                onChange={(e) => setFormData({...formData, level: e.target.value})}
+                className="w-full px-4 py-3 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+              >
+                {gradeLevels.map(lvl => <option key={lvl} value={lvl}>{lvl}</option>)}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Module Title</label>
+            <input 
+              required
+              type="text" 
+              placeholder="e.g. Advanced Fractions"
+              value={formData.name}
+              onChange={(e) => setFormData({...formData, name: e.target.value})}
+              className="w-full px-4 py-3 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Assigned Instructor</label>
+            <input 
+              required
+              type="text" 
+              placeholder="e.g. Dr. Almaz"
+              value={formData.faculty}
+              onChange={(e) => setFormData({...formData, faculty: e.target.value})}
+              className="w-full px-4 py-3 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+            />
+          </div>
+          <div className="pt-4">
+            <button 
+              type="submit"
+              className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold hover:bg-indigo-700 transition-all flex items-center justify-center shadow-lg shadow-indigo-100"
+            >
+              Add to Curriculum
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+const AdmissionFormModal = ({ onClose, onSubmit }) => {
+  const [formData, setFormData] = useState({
+    id: `STU${Math.floor(Math.random() * 900) + 100}`,
+    name: '',
+    email: '',
+    level: 'Grade 1',
+    age: '',
+    gender: 'Male',
+    phone: '',
+    location: ''
+  });
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!formData.name || !formData.email) return;
+    onSubmit(formData);
+  };
+
+  const gradeOptions = [
+    { label: "Elementary (K-8)", options: ["Kindergarten", "Grade 1", "Grade 2", "Grade 3", "Grade 4", "Grade 5", "Grade 6", "Grade 7", "Grade 8"] },
+    { label: "Secondary (9-12)", options: ["Grade 9", "Grade 10", "Grade 11", "Grade 12"] },
+    { label: "Language Proficiency", options: ["Beginner", "Intermediate", "Advanced"] }
+  ];
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 overflow-y-auto">
+      <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200 my-8">
+        <div className="p-6 border-b flex justify-between items-center bg-indigo-900 text-white">
+          <h4 className="text-lg font-bold text-white">Manual Admission Form</h4>
+          <button onClick={onClose} className="p-1 hover:bg-white/10 rounded-lg transition-colors text-white">
+            <X size={20} />
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Full Name</label>
+              <input 
+                required
+                type="text" 
+                placeholder="Abebe Bekele"
+                value={formData.name}
+                onChange={(e) => setFormData({...formData, name: e.target.value})}
+                className="w-full px-4 py-2.5 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all focus:bg-white"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Email Address</label>
+              <input 
+                required
+                type="email" 
+                placeholder="student@edu.et"
+                value={formData.email}
+                onChange={(e) => setFormData({...formData, email: e.target.value})}
+                className="w-full px-4 py-2.5 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all focus:bg-white"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+             <div>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Age</label>
+              <input 
+                type="number" 
+                placeholder="Years"
+                value={formData.age}
+                onChange={(e) => setFormData({...formData, age: e.target.value})}
+                className="w-full px-4 py-2.5 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all focus:bg-white"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Gender</label>
+              <select 
+                value={formData.gender}
+                onChange={(e) => setFormData({...formData, gender: e.target.value})}
+                className="w-full px-4 py-2.5 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all focus:bg-white"
+              >
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Phone Number</label>
+            <input 
+              type="tel" 
+              placeholder="+251 9XX XXXXXX"
+              value={formData.phone}
+              onChange={(e) => setFormData({...formData, phone: e.target.value})}
+              className="w-full px-4 py-2.5 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all focus:bg-white"
+            />
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Location / Address</label>
+            <input 
+              type="text" 
+              placeholder="e.g. Addis Ababa, Bole"
+              value={formData.location}
+              onChange={(e) => setFormData({...formData, location: e.target.value})}
+              className="w-full px-4 py-2.5 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all focus:bg-white"
+            />
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Grade / Level Assignment</label>
+            <select 
+              value={formData.level}
+              onChange={(e) => setFormData({...formData, level: e.target.value})}
+              className="w-full px-4 py-2.5 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all focus:bg-white"
+            >
+              {gradeOptions.map(group => (
+                <optgroup key={group.label} label={group.label}>
+                  {group.options.map(opt => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </div>
+
+          <div className="pt-4">
+            <button 
+              type="submit"
+              className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-100 transition-all flex items-center justify-center"
+            >
+              Confirm Admission
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+const StudentRegistration = ({ courses }) => {
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+      <div className="p-6 border-b">
+        <h3 className="text-lg font-bold">Available Class Modules</h3>
+      </div>
+      <table className="w-full text-left">
+        <thead className="bg-gray-50 text-gray-400 text-[10px] uppercase font-bold tracking-widest">
+          <tr>
+            <th className="px-6 py-4 text-center">Module Code</th>
+            <th className="px-6 py-4">Title</th>
+            <th className="px-6 py-4 text-center">Level</th>
+            <th className="px-6 py-4">Assigned Teacher</th>
+            <th className="px-6 py-4 text-right">Action</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y text-sm">
+          {courses.map(course => (
+            <tr key={course.id} className="hover:bg-gray-50 transition-colors">
+              <td className="px-6 py-4 font-mono font-bold text-indigo-600 text-center">{course.id}</td>
+              <td className="px-6 py-4 font-bold text-gray-900">{course.name}</td>
+              <td className="px-6 py-4 text-center font-medium text-gray-500">{course.level}</td>
+              <td className="px-6 py-4 text-gray-600">{course.faculty}</td>
+              <td className="px-6 py-4 text-right">
+                <button className="bg-indigo-600 text-white px-4 py-1.5 rounded-xl text-xs font-bold hover:bg-indigo-700 transition-colors">
+                  Enroll
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+const FacultyRoster = ({ students }) => {
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+      <div className="p-6 border-b flex justify-between items-center bg-gray-50/50">
+        <h3 className="text-lg font-bold">Class List: Grade 5 Mathematics</h3>
+        <button className="text-indigo-600 flex items-center space-x-1 text-sm font-bold hover:bg-indigo-50 px-3 py-1.5 rounded-lg transition-colors">
+          <LinkIcon size={14} />
+          <span>Launch DNEC EthioEducation LMS Classroom</span>
+        </button>
+      </div>
+      <table className="w-full text-left">
+        <thead className="bg-gray-50 text-gray-400 text-[10px] uppercase font-bold tracking-widest">
+          <tr>
+            <th className="px-6 py-4">ID</th>
+            <th className="px-6 py-4">Student Name</th>
+            <th className="px-6 py-4">Level</th>
+            <th className="px-6 py-4">Status</th>
+            <th className="px-6 py-4 text-right">Manage</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y text-sm">
+          {students.map(student => (
+            <tr key={student.id} className="hover:bg-gray-50 transition-colors">
+              <td className="px-6 py-4 font-mono font-bold text-indigo-600">{student.id}</td>
+              <td className="px-6 py-4 font-bold text-gray-900">{student.name}</td>
+              <td className="px-6 py-4 font-medium">{student.level}</td>
+              <td className="px-6 py-4">
+                <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wide ${
+                  student.status === 'Active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                }`}>
+                  {student.status}
+                </span>
+              </td>
+              <td className="px-6 py-4 text-right space-x-3">
+                <button className="text-indigo-600 text-xs font-bold hover:underline">Profile</button>
+                <button className="text-indigo-600 text-xs font-bold hover:underline">Assess</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+const StudentDashboard = ({ moodleUserId, studentName }) => {
+  const [grades, setGrades] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if (!moodleUserId) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    apiFetch(`/api/moodle/site-students/${moodleUserId}/grades`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(res)))
+      .then((data) => {
+        if (!cancelled) setGrades(data.grades || []);
+      })
+      .catch(() => {
+        if (!cancelled) setError('Could not load your grade overview right now.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [moodleUserId]);
+
+  const percentages = grades
+    .map((g) => Number(g.course_total_percentage))
+    .filter((n) => !Number.isNaN(n));
+  const avg = percentages.length ? percentages.reduce((a, b) => a + b, 0) / percentages.length : null;
+  const best = percentages.length ? Math.max(...percentages) : null;
+  const lowest = percentages.length ? Math.min(...percentages) : null;
+  const coursesWithPct = grades
+    .map((g) => {
+      const pct = Number(g.course_total_percentage);
+      if (Number.isNaN(pct)) return null;
+      return {
+        course: g.course_name || `Course ${g.course_id || ''}`,
+        pct: Math.max(0, Math.min(100, pct)),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.pct - a.pct);
+  const topCourses = coursesWithPct.slice(0, 6);
+  const bandBuckets = [
+    { label: '90-100', min: 90, max: 100, inclusiveMax: true, color: 'bg-emerald-500' },
+    { label: '80-89', min: 80, max: 90, color: 'bg-green-500' },
+    { label: '70-79', min: 70, max: 80, color: 'bg-blue-500' },
+    { label: '60-69', min: 60, max: 70, color: 'bg-amber-500' },
+    { label: '0-59', min: 0, max: 60, color: 'bg-rose-500' },
+  ].map((b) => ({
+    ...b,
+    count: percentages.filter((p) => p >= b.min && (b.inclusiveMax ? p <= b.max : p < b.max)).length,
+  }));
+  const maxBand = Math.max(1, ...bandBuckets.map((b) => b.count));
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-indigo-900 border border-indigo-100 p-8 rounded-3xl text-white shadow-xl shadow-indigo-100">
+        <h3 className="text-xl font-black uppercase tracking-tight">My Dashboard</h3>
+        <p className="text-indigo-100 text-base mt-2">
+          Hi, <span className="font-bold">{studentName || 'Student'}</span>. Here is your personal
+          performance snapshot from DNEC EthioEducation LMS.
+        </p>
+        <p className="text-indigo-200 text-sm mt-1">Keep going - your progress is updated from your LMS grades.</p>
+      </div>
+      {error && <p className="text-red-600 bg-red-50 p-3 rounded-xl border border-red-100 text-sm">{error}</p>}
+      {loading ? (
+        <p className="text-gray-500 text-sm">Loading your data…</p>
+      ) : (
+        <>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+            <p className="text-xs uppercase tracking-wider text-gray-500 font-semibold">My courses</p>
+            <p className="mt-2 text-2xl font-black text-gray-900">{percentages.length}</p>
+          </div>
+          <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+            <p className="text-xs uppercase tracking-wider text-gray-500 font-semibold">My average</p>
+            <p className="mt-2 text-2xl font-black text-emerald-600">{avg == null ? '—' : `${avg.toFixed(1)}%`}</p>
+          </div>
+          <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+            <p className="text-xs uppercase tracking-wider text-gray-500 font-semibold">Best course</p>
+            <p className="mt-2 text-2xl font-black text-indigo-600">{best == null ? '—' : `${best.toFixed(1)}%`}</p>
+          </div>
+          <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+            <p className="text-xs uppercase tracking-wider text-gray-500 font-semibold">Needs focus</p>
+            <p className="mt-2 text-2xl font-black text-amber-600">{lowest == null ? '—' : `${lowest.toFixed(1)}%`}</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
+            <h4 className="text-sm font-bold text-gray-900 mb-4">Top course performance</h4>
+            {topCourses.length === 0 ? (
+              <p className="text-sm text-gray-500">No grade percentages available yet.</p>
+            ) : (
+              <div className="space-y-3">
+                {topCourses.map((item) => (
+                  <div key={item.course} className="flex items-center gap-3 text-xs">
+                    <div className="w-36 truncate text-gray-700 font-medium">{item.course}</div>
+                    <div className="flex-1 h-3 rounded-full bg-indigo-50 overflow-hidden">
+                      <div
+                        className="h-3 rounded-full bg-indigo-500 transition-all duration-500"
+                        style={{ width: `${Math.max(8, item.pct)}%` }}
+                      />
+                    </div>
+                    <div className="w-10 text-right font-semibold text-indigo-700">{item.pct.toFixed(0)}%</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
+            <h4 className="text-sm font-bold text-gray-900 mb-4">Grade distribution</h4>
+            {percentages.length === 0 ? (
+              <p className="text-sm text-gray-500">No graded courses available yet.</p>
+            ) : (
+              <div className="space-y-3">
+                {bandBuckets.map((b) => (
+                  <div key={b.label} className="flex items-center gap-3 text-xs">
+                    <div className="w-14 text-gray-600 font-semibold">{b.label}</div>
+                    <div className="flex-1 h-3 rounded-full bg-gray-100 overflow-hidden">
+                      <div
+                        className={`h-3 rounded-full ${b.color} transition-all duration-500`}
+                        style={{ width: `${(b.count / maxBand) * 100}%` }}
+                      />
+                    </div>
+                    <div className="w-6 text-right font-semibold text-gray-700">{b.count}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
+  const isStudentScoped = !!lockedMoodleUserId;
+  const [students, setStudents] = useState([]);
+  const [selectedStudentId, setSelectedStudentId] = useState(lockedMoodleUserId ? String(lockedMoodleUserId) : '');
+  const [grades, setGrades] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [fetching, setFetching] = useState(false);
+  const [message, setMessage] = useState(null);
+  const [error, setError] = useState(null);
+  const [detailCourse, setDetailCourse] = useState(null);
+  const [detailItems, setDetailItems] = useState([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  useEffect(() => {
+    if (isStudentScoped) {
+      setStudents([{ id: lockedMoodleUserId, fullname: 'My account' }]);
+      setSelectedStudentId(String(lockedMoodleUserId));
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    apiFetch('/api/moodle/site-students')
+      .then((res) => res.ok ? res.json() : Promise.reject(res))
+      .then((data) => {
+        if (!cancelled) {
+          setStudents(data.students || []);
+          if (data.students?.length && !selectedStudentId) {
+            setSelectedStudentId(String(data.students[0].id));
+          }
+          setPickerOpen(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setError('Could not load students right now. Please try again.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [isStudentScoped, lockedMoodleUserId]);
+
+  // Clear grades when switching student; only show grades after "Fetch grades from DNEC EthioEducation LMS" is used.
+  useEffect(() => {
+    setGrades([]);
+    setMessage(null);
+  }, [selectedStudentId]);
+
+  const handleFetchFromMoodle = () => {
+    if (!selectedStudentId) return;
+    setFetching(true);
+    setError(null);
+    setMessage(null);
+    apiFetch(`/api/moodle/site-students/${selectedStudentId}/grades`)
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (ok) {
+          setMessage(data.message || 'Grades fetched from DNEC EthioEducation LMS.');
+          setGrades(data.grades || []);
+          if (typeof window !== 'undefined') {
+            try {
+              window.localStorage.setItem('sis_last_grade_fetch', new Date().toISOString());
+            } catch {
+              // ignore storage errors
+            }
+          }
+        } else {
+          setError(data.message || 'Failed to fetch grades from DNEC EthioEducation LMS.');
+        }
+      })
+      .catch(() => setError('Request failed. Please try again.'))
+      .finally(() => setFetching(false));
+  };
+
+  const handleViewDetails = (course) => {
+    if (!selectedStudentId || !course.course_id) return;
+    const student = students.find((s) => String(s.id) === selectedStudentId);
+    const studentName =
+      student?.fullname || student?.email || student?.username || `User ${selectedStudentId}`;
+    setDetailCourse({ ...course, student_name: studentName });
+    setDetailItems([]);
+    setDetailError(null);
+    setDetailLoading(true);
+    apiFetch(`/api/moodle/course-grades-direct/${selectedStudentId}/${course.course_id}`)
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (ok) {
+          setDetailItems(data.items || []);
+        } else {
+          setDetailError(data.message || 'Could not load detailed grades.');
+        }
+      })
+      .catch(() => setDetailError('Request failed. Please try again.'))
+      .finally(() => setDetailLoading(false));
+  };
+
+  const gradeCoursesWithPct = grades
+    .map((g) => {
+      if (g.course_total_percentage != null) {
+        const pct = Number(g.course_total_percentage);
+        if (Number.isNaN(pct)) return null;
+        return {
+          course_id: g.course_id,
+          course_name: g.course_name || `Course ${g.course_id || ''}`,
+          percentage: Math.max(0, Math.min(100, pct)),
+        };
+      }
+      const gradeVal = typeof g.grade === 'number' ? g.grade : Number(g.grade);
+      const maxVal = typeof g.max_grade === 'number' ? g.max_grade : Number(g.max_grade);
+      if (Number.isNaN(gradeVal)) {
+        return null;
+      }
+      const pct =
+        !maxVal || Number.isNaN(maxVal) || maxVal === 0 ? gradeVal : (gradeVal / maxVal) * 100;
+      return {
+        course_id: g.course_id,
+        course_name: g.course_name || `Course ${g.course_id || ''}`,
+        percentage: Math.max(0, Math.min(100, pct)),
+      };
+    })
+    .filter(Boolean);
+
+  const sortedByPct = [...gradeCoursesWithPct].sort((a, b) => b.percentage - a.percentage);
+  const topCourses = sortedByPct.slice(0, 3);
+  const bottomCourses = [...sortedByPct]
+    .reverse()
+    .filter(
+      (c) => !topCourses.some((t) => (t.course_id || t.course_name) === (c.course_id || c.course_name))
+    )
+    .slice(0, 3);
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-indigo-900 border border-indigo-100 p-8 rounded-3xl flex items-start space-x-6 text-white shadow-xl shadow-indigo-100">
+        <div className="bg-white/10 p-4 rounded-2xl backdrop-blur-md">
+          <LinkIcon size={32} className="text-indigo-300" />
+        </div>
+        <div>
+          <h3 className="text-xl font-black uppercase tracking-tight text-white">DNEC EthioEducation LMS Sync Hub</h3>
+          <p className="text-indigo-200 text-sm mt-1 max-w-md">
+            {isStudentScoped
+              ? 'View your own report card from DNEC EthioEducation LMS.'
+              : 'Fetch grades from DNEC EthioEducation LMS for a student. Select a student, then click "Fetch grades from DNEC EthioEducation LMS".'}
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <h4 className="font-bold mb-4 text-gray-800">Students &amp; Fetch</h4>
+          {error && (
+            <p className="text-red-600 bg-red-50 p-2.5 rounded-xl border border-red-100 text-sm mb-4">{error}</p>
+          )}
+          {message && (
+            <p className="text-green-600 bg-green-50 p-2.5 rounded-xl border border-green-100 text-sm mb-4 flex items-center">
+              <CheckCircle className="text-green-500 mr-2" size={18} />
+              {message}
+            </p>
+          )}
+          {loading && students.length === 0 ? (
+            <p className="text-gray-500 text-sm">Loading students…</p>
+          ) : (
+            <div className="space-y-3">
+              {!isStudentScoped && (
+                <>
+                  <label className="block text-sm font-medium text-gray-700">Select LMS user</label>
+                  <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setPickerOpen((open) => !open)}
+                  className="w-full px-4 py-2 border border-gray-200 rounded-xl text-sm text-left bg-white flex items-center justify-between"
+                >
+                  <span className={selectedStudentId ? 'text-gray-900' : 'text-gray-400'}>
+                    {selectedStudentId
+                      ? (() => {
+                          const s = students.find(
+                            (u) => String(u.id) === String(selectedStudentId)
+                          );
+                          if (!s) return '— Select —';
+                          return `${s.fullname} – ${s.email || s.username || ''}`;
+                        })()
+                      : '— Select —'}
+                  </span>
+                  <span className="ml-2 text-gray-400 text-xs">{pickerOpen ? '▲' : '▼'}</span>
+                </button>
+                {pickerOpen && (
+                  <div className="absolute left-0 right-0 mt-1 max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-20">
+                    {students.map((s) => (
+                      <button
+                        type="button"
+                        key={s.id}
+                        onClick={() => {
+                          setSelectedStudentId(String(s.id));
+                          setPickerOpen(false);
+                        }}
+                        className={`w-full text-left px-4 py-2 text-sm hover:bg-indigo-50 ${
+                          String(s.id) === String(selectedStudentId)
+                            ? 'bg-indigo-50 text-indigo-700'
+                            : 'text-gray-800'
+                        }`}
+                      >
+                        <div className="font-medium truncate">{s.fullname}</div>
+                        <div className="text-xs text-gray-500 truncate">
+                          {s.email || s.username || ''}
+                        </div>
+                      </button>
+                    ))}
+                    {students.length === 0 && (
+                      <div className="px-4 py-2 text-xs text-gray-500">No LMS users found.</div>
+                    )}
+                  </div>
+                )}
+                  </div>
+                </>
+              )}
+              <button
+                onClick={handleFetchFromMoodle}
+                disabled={!selectedStudentId || fetching}
+                className="w-full px-4 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                {fetching ? 'Fetching…' : isStudentScoped ? 'Load my grades' : 'Fetch grades from DNEC EthioEducation LMS'}
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <div className="flex items-center justify-between mb-4">
+            <h4 className="font-bold flex items-center text-gray-800">
+              <CheckCircle className="text-green-500 mr-2" size={18} />
+              Grades (from DNEC EthioEducation LMS)
+            </h4>
+            <button
+              type="button"
+              onClick={() => {
+                const studentLabel = students.find((s) => String(s.id) === selectedStudentId)?.email || selectedStudentId;
+                const rows = [['Course', 'Grade', 'Max grade']];
+                grades.forEach((g) => {
+                  rows.push([
+                    g.course_name || '',
+                    g.grade != null ? g.grade : '',
+                    g.max_grade != null ? g.max_grade : '',
+                  ]);
+                });
+                downloadCsv(`grades-${studentLabel}-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+              }}
+              disabled={grades.length === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-lg border border-indigo-200 disabled:opacity-50 disabled:pointer-events-none"
+            >
+              <Download size={14} />
+              Export CSV
+            </button>
+          </div>
+          {grades.length === 0 ? (
+            <p className="text-gray-500 text-sm">
+              Select a student and click &quot;Fetch grades from DNEC EthioEducation LMS&quot; to
+              see grades here.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {grades.map((g, i) => {
+                const pct =
+                  g.course_total_percentage != null
+                    ? g.course_total_percentage
+                    : g.max_grade
+                    ? (Number(g.grade) / Number(g.max_grade)) * 100
+                    : Number(g.grade);
+                const displayPct =
+                  pct != null && !Number.isNaN(pct) ? `${pct.toFixed(2).replace(/\.00$/, '')}%` : '—';
+                return (
+                  <div
+                    key={i}
+                    className="flex items-center py-2 border-b border-gray-100 last:border-0"
+                  >
+                    <div className="flex-1">
+                      <span className="text-sm font-medium text-gray-800">{g.course_name}</span>
+                    </div>
+                    <div className="w-24 text-center">
+                      <span className="text-sm text-gray-700 font-semibold">{displayPct}</span>
+                    </div>
+                    <div className="w-24 text-right">
+                      {g.course_id && (
+                        <button
+                          onClick={() => handleViewDetails(g)}
+                          className="text-xs font-semibold text-indigo-600 hover:text-indigo-800"
+                        >
+                          View details
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+      {gradeCoursesWithPct.length > 0 && (
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <h4 className="text-sm font-semibold text-gray-900 mb-4">
+            Course performance overview
+          </h4>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <h5 className="text-xs font-bold text-emerald-600 uppercase tracking-widest mb-2">
+                Excelling in
+              </h5>
+              {topCourses.length === 0 ? (
+                <p className="text-xs text-gray-500">No graded courses yet.</p>
+              ) : (
+                <div className="space-y-2">
+                  {topCourses.map((c) => {
+                    const width = Math.max(10, c.percentage);
+                    return (
+                      <div
+                        key={c.course_id || c.course_name}
+                        className="flex items-center gap-3 text-xs"
+                      >
+                        <div className="w-32 truncate text-gray-700 font-medium">
+                          {c.course_name}
+                        </div>
+                        <div className="flex-1 h-3 rounded-full bg-emerald-50 overflow-hidden">
+                          <div
+                            className="h-3 rounded-full bg-emerald-500 transition-all duration-500"
+                            style={{ width: `${width}%` }}
+                          />
+                        </div>
+                        <div className="w-10 text-right text-emerald-700 font-semibold">
+                          {c.percentage.toFixed(0)}%
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div>
+              <h5 className="text-xs font-bold text-rose-600 uppercase tracking-widest mb-2">
+                Needs attention
+              </h5>
+              {bottomCourses.length === 0 ? (
+                <p className="text-xs text-gray-500">No graded courses yet.</p>
+              ) : (
+                <div className="space-y-2">
+                  {bottomCourses.map((c) => {
+                    const width = Math.max(10, c.percentage);
+                    return (
+                      <div
+                        key={c.course_id || c.course_name}
+                        className="flex items-center gap-3 text-xs"
+                      >
+                        <div className="w-32 truncate text-gray-700 font-medium">
+                          {c.course_name}
+                        </div>
+                        <div className="flex-1 h-3 rounded-full bg-rose-50 overflow-hidden">
+                          <div
+                            className="h-3 rounded-full bg-rose-500 transition-all duration-500"
+                            style={{ width: `${width}%` }}
+                          />
+                        </div>
+                        <div className="w-10 text-right text-rose-700 font-semibold">
+                          {c.percentage.toFixed(0)}%
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {detailCourse && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+          <div className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden">
+            <div className="p-4 border-b flex justify-between items-center bg-indigo-900 text-white">
+              <div>
+                <h4 className="text-sm font-bold">
+                  Detailed grades • {detailCourse.course_name}
+                </h4>
+                {detailCourse.student_name && (
+                  <p className="text-indigo-200 text-xs mt-1">Student: {detailCourse.student_name}</p>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {detailItems.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const studentName = detailCourse.student_name ?? '';
+                      const rows = detailItems.map((item) => ({
+                        'Student': studentName,
+                        'Grade item': item.item_name ?? '',
+                        'Weight': item.weight ?? '',
+                        'Grade': item.grade_text ?? '',
+                        'Range': item.range ?? '',
+                        'Percentage': item.percentage ?? '',
+                        'Contribution': item.contribution_to_total ?? '',
+                      }));
+                      const courseSafe = (detailCourse.course_name || 'course').replace(/[^\w\s-]/g, '');
+                      const studentSafe = studentName.replace(/[^\w\s-]/g, '') || 'student';
+                      const date = new Date().toISOString().slice(0, 10);
+                      downloadCsv(`${studentSafe}-grades-detail-${courseSafe}-${date}.csv`, rows);
+                    }}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-semibold"
+                  >
+                    <Download size={12} />
+                    Export CSV
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    setDetailCourse(null);
+                    setDetailItems([]);
+                    setDetailError(null);
+                  }}
+                  className="px-2 py-1 rounded-lg hover:bg-white/10 text-xs font-semibold"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="p-4 max-h-[60vh] overflow-y-auto">
+              {detailLoading ? (
+                <p className="text-gray-500 text-sm">Loading detailed grades…</p>
+              ) : detailError ? (
+                <p className="text-red-600 text-sm">{detailError}</p>
+              ) : detailItems.length === 0 ? (
+                <p className="text-gray-500 text-sm">No detailed items found for this course.</p>
+              ) : (
+                <div className="text-xs md:text-sm">
+                  <div className="grid grid-cols-3 md:grid-cols-7 gap-2 px-2 py-2 border-b text-[10px] md:text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    <div className="col-span-2 md:col-span-2">Grade item</div>
+                    <div className="hidden md:block">Weight</div>
+                    <div>Grade</div>
+                    <div className="hidden md:block">Range</div>
+                    <div className="hidden md:block">Percentage</div>
+                    <div className="hidden md:block text-right">Contribution</div>
+                  </div>
+                  <ul className="divide-y">
+                    {detailItems.map((item, idx) => (
+                      <li
+                        key={idx}
+                        className="py-2 px-2 grid grid-cols-3 md:grid-cols-7 gap-2 items-center"
+                      >
+                        <div className="col-span-2 md:col-span-2 font-medium text-gray-800">
+                          {item.item_name}
+                        </div>
+                        <div className="hidden md:block text-gray-600">
+                          {item.weight || '—'}
+                        </div>
+                        <div className="text-gray-800">
+                          {item.grade_text || '—'}
+                        </div>
+                        <div className="hidden md:block text-gray-600">
+                          {item.range || '—'}
+                        </div>
+                        <div className="hidden md:block text-gray-600">
+                          {item.percentage || '—'}
+                        </div>
+                        <div className="hidden md:block text-right text-gray-800">
+                          {item.contribution_to_total || '—'}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default App;
+
+

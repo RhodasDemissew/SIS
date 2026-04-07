@@ -1,0 +1,10 @@
+# Prevent accidental secret/data commits if repo is initialized at workspace root
+*.env
+*.env.*
+SIS token.txt
+Token.txt
+*.sqlite
+*.sqlite-*
+*.log
+node_modules/
+dist/

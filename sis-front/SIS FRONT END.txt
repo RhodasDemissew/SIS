@@ -1,0 +1,935 @@
+
+
+
+
+Tigist Birhan
+Wed, Feb 25, 2:34 PM (17 hours ago)
+https://gemini.google.com/share/e292c3c6f613
+
+
+
+
+import React, { useState, useEffect } from 'react';
+import { 
+  Users, 
+  BookOpen, 
+  GraduationCap, 
+  Settings, 
+  LayoutDashboard, 
+  ClipboardList, 
+  CreditCard, 
+  FileText,
+  LogOut,
+  UserCircle,
+  Link as LinkIcon,
+  Search,
+  CheckCircle,
+  AlertCircle,
+  UserPlus,
+  PlusCircle,
+  Trash2,
+  X,
+  Eye,
+  Info,
+  MapPin,
+  Phone,
+  User,
+  Calendar
+} from 'lucide-react';
+
+// Updated Mock Data for K-12 and Levels
+const INITIAL_COURSES = [
+  { id: 'ENG-BEG', name: 'English Fundamentals', level: 'Beginner', faculty: 'Ms. Aster' },
+  { id: 'MATH-G5', name: 'Grade 5 Mathematics', level: 'Grade 5', faculty: 'Ato Solomon' },
+  { id: 'SCI-G8', name: 'Grade 8 Integrated Science', level: 'Grade 8', faculty: 'W/ro Mulu' },
+  { id: 'AMH-ADV', name: 'Advanced Amharic Literature', level: 'Advanced', faculty: 'Ato Kebede' },
+];
+
+const INITIAL_STUDENTS = [
+  { 
+    id: 'STU001', 
+    name: 'Yohannes Tesfaye', 
+    email: 'yohannes@edu.et', 
+    status: 'Active', 
+    balance: 1200, 
+    level: 'Grade 10',
+    age: 16,
+    gender: 'Male',
+    phone: '+251 911 223344',
+    location: 'Addis Ababa, Bole'
+  },
+  { 
+    id: 'STU002', 
+    name: 'Sara Bekele', 
+    email: 'sara.b@edu.et', 
+    status: 'Active', 
+    balance: 0, 
+    level: 'Intermediate',
+    age: 19,
+    gender: 'Female',
+    phone: '+251 912 556677',
+    location: 'Addis Ababa, Sarbet'
+  },
+  { 
+    id: 'STU003', 
+    name: 'Dawit Mengistu', 
+    email: 'dawit.m@edu.et', 
+    status: 'Probation', 
+    balance: 450, 
+    level: 'Advanced',
+    age: 22,
+    gender: 'Male',
+    phone: '+251 910 889900',
+    location: 'Adama, City Center'
+  },
+];
+
+const App = () => {
+  const [userRole, setUserRole] = useState('admin'); 
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [students, setStudents] = useState(INITIAL_STUDENTS);
+  const [courses, setCourses] = useState(INITIAL_COURSES);
+  const [showAdmissionModal, setShowAdmissionModal] = useState(false);
+  const [showCurriculumModal, setShowCurriculumModal] = useState(false);
+  const [selectedStudent, setSelectedStudent] = useState(null);
+
+  const menuItems = {
+    student: [
+      { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+      { id: 'registration', label: 'Class Enrollment', icon: BookOpen },
+      { id: 'progress', label: 'Academic Record', icon: GraduationCap },
+      { id: 'financials', label: 'Fees & Payments', icon: CreditCard },
+    ],
+    faculty: [
+      { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+      { id: 'roster', label: 'Class Roster', icon: Users },
+      { id: 'attendance', label: 'Attendance', icon: ClipboardList },
+      { id: 'grading', label: 'Assessment', icon: FileText },
+    ],
+    admin: [
+      { id: 'dashboard', label: 'System Overview', icon: LayoutDashboard },
+      { id: 'admissions', label: 'Admissions', icon: Users },
+      { id: 'curriculum', label: 'Curriculum', icon: BookOpen },
+      { id: 'moodle', label: 'Moodle Sync', icon: LinkIcon },
+      { id: 'settings', label: 'Settings', icon: Settings },
+    ]
+  };
+
+  const handleAdmitStudent = (newStudent) => {
+    setStudents([...students, { ...newStudent, status: 'Active', balance: 0 }]);
+    setShowAdmissionModal(false);
+  };
+
+  const handleDeleteStudent = (id) => {
+    setStudents(students.filter(s => s.id !== id));
+  };
+
+  const handleAddCourse = (newCourse) => {
+    setCourses([...courses, newCourse]);
+    setShowCurriculumModal(false);
+  };
+
+  const handleDeleteCourse = (courseId) => {
+    setCourses(courses.filter(c => c.id !== courseId));
+  };
+
+  const renderContent = () => {
+    switch (activeTab) {
+      case 'dashboard':
+        return <Dashboard role={userRole} />;
+      case 'registration':
+        return <StudentRegistration courses={courses} />;
+      case 'roster':
+        return <FacultyRoster students={students} />;
+      case 'admissions':
+        return (
+          <AdmissionsModule 
+            students={students} 
+            onOpenModal={() => setShowAdmissionModal(true)} 
+            onViewRecord={(student) => setSelectedStudent(student)}
+            onDeleteStudent={handleDeleteStudent}
+          />
+        );
+      case 'curriculum':
+        return (
+          <CurriculumModule 
+            courses={courses} 
+            onOpenModal={() => setShowCurriculumModal(true)}
+            onDelete={handleDeleteCourse}
+          />
+        );
+      case 'moodle':
+        return <AdminMoodleSync />;
+      default:
+        return (
+          <div className="flex flex-col items-center justify-center h-64 text-gray-500">
+            <AlertCircle size={48} className="mb-4" />
+            <p>Module "{activeTab}" is currently under development.</p>
+          </div>
+        );
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex text-slate-900 font-sans">
+      {/* Sidebar */}
+      <div className="w-64 bg-indigo-950 text-white flex flex-col shrink-0">
+        <div className="p-6 border-b border-indigo-900">
+          <h1 className="text-2xl font-bold tracking-tight text-white">SMS Gateway</h1>
+          <p className="text-indigo-400 text-xs uppercase tracking-widest mt-1 font-semibold">Ethiopia Portal</p>
+        </div>
+        
+        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+          {menuItems[userRole].map((item) => (
+            <button
+              key={item.id}
+              onClick={() => setActiveTab(item.id)}
+              className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all ${
+                activeTab === item.id ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-950/50' : 'text-indigo-300 hover:bg-indigo-900 hover:text-white'
+              }`}
+            >
+              <item.icon size={20} />
+              <span className="font-medium">{item.label}</span>
+            </button>
+          ))}
+        </nav>
+
+        <div className="p-4 border-t border-indigo-900">
+          <div className="flex items-center space-x-3 mb-4 px-4 text-sm">
+            <UserCircle size={20} className="text-indigo-400" />
+            <div className="truncate">
+              <p className="text-[10px] text-indigo-500 font-bold uppercase mb-1">Role Switcher</p>
+              <select 
+                className="bg-transparent border-none p-0 text-white focus:ring-0 cursor-pointer text-sm font-semibold w-full"
+                value={userRole}
+                onChange={(e) => {
+                  setUserRole(e.target.value);
+                  setActiveTab('dashboard');
+                }}
+              >
+                <option value="student" className="text-black">Student</option>
+                <option value="faculty" className="text-black">Faculty</option>
+                <option value="admin" className="text-black">Administrator</option>
+              </select>
+            </div>
+          </div>
+          <button className="w-full flex items-center space-x-3 px-4 py-3 text-indigo-400 hover:text-white transition-colors">
+            <LogOut size={18} />
+            <span className="text-sm font-medium">Logout</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col h-screen overflow-hidden">
+        <header className="h-16 bg-white border-b flex items-center justify-between px-8 shrink-0">
+          <div className="flex items-center text-gray-400 space-x-2">
+            <span className="capitalize text-[10px] font-black tracking-widest bg-gray-100 px-2 py-1 rounded text-gray-500">{userRole}</span>
+            <span className="text-gray-300">/</span>
+            <span className="text-gray-900 font-semibold capitalize">{activeTab.replace('-', ' ')}</span>
+          </div>
+          <div className="flex items-center space-x-4">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
+              <input 
+                type="text" 
+                placeholder="Search students, modules..." 
+                className="pl-9 pr-4 py-2 border border-gray-100 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 w-64 bg-gray-50 transition-all focus:bg-white"
+              />
+            </div>
+            <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-xs">
+              {userRole[0].toUpperCase()}
+            </div>
+          </div>
+        </header>
+
+        <main className="p-8 overflow-y-auto flex-1">
+          {renderContent()}
+        </main>
+      </div>
+
+      {/* Modals */}
+      {showAdmissionModal && (
+        <AdmissionFormModal 
+          onClose={() => setShowAdmissionModal(false)} 
+          onSubmit={handleAdmitStudent} 
+        />
+      )}
+      {showCurriculumModal && (
+        <CourseFormModal 
+          onClose={() => setShowCurriculumModal(false)} 
+          onSubmit={handleAddCourse} 
+        />
+      )}
+      {selectedStudent && (
+        <StudentProfileModal 
+          student={selectedStudent} 
+          onClose={() => setSelectedStudent(null)} 
+        />
+      )}
+    </div>
+  );
+};
+
+// --- SUB-COMPONENTS ---
+
+const Dashboard = ({ role }) => {
+  const stats = {
+    student: [
+      { label: 'Attendance', value: '94%', icon: CheckCircle, color: 'text-blue-600', bg: 'bg-blue-50' },
+      { label: 'Classes Completed', value: '8', icon: BookOpen, color: 'text-green-600', bg: 'bg-green-50' },
+      { label: 'Fees Due', value: '1,200 ETB', icon: CreditCard, color: 'text-red-600', bg: 'bg-red-50' },
+    ],
+    faculty: [
+      { label: 'Active Classes', value: '4', icon: BookOpen, color: 'text-blue-600', bg: 'bg-blue-50' },
+      { label: 'Total Students', value: '128', icon: Users, color: 'text-green-600', bg: 'bg-green-50' },
+      { label: 'Pending Grades', value: '12', icon: FileText, color: 'text-orange-600', bg: 'bg-orange-50' },
+    ],
+    admin: [
+      { label: 'New Admissions', value: '24', icon: Users, color: 'text-blue-600', bg: 'bg-blue-50' },
+      { label: 'Grade Sections', value: '15', icon: GraduationCap, color: 'text-purple-600', bg: 'bg-purple-50' },
+      { label: 'Moodle Sync Status', value: 'Healthy', icon: LinkIcon, color: 'text-green-600', bg: 'bg-green-50' },
+    ]
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {stats[role].map((s, i) => (
+          <div key={i} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+            <div className="flex items-center justify-between mb-4">
+              <div className={`p-3 rounded-xl ${s.bg}`}>
+                <s.icon className={s.color} size={24} />
+              </div>
+            </div>
+            <h3 className="text-gray-500 text-sm font-medium">{s.label}</h3>
+            <p className="text-2xl font-bold text-gray-900 mt-1">{s.value}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+        <h3 className="text-lg font-bold mb-4">Academic Notice Board</h3>
+        <div className="space-y-4">
+          {[1, 2, 3].map((_, i) => (
+            <div key={i} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl hover:bg-white border border-transparent hover:border-gray-200 transition-all">
+              <div className="flex items-center space-x-4">
+                <div className="text-center w-12 border-r pr-4 border-gray-200">
+                  <p className="text-[10px] text-gray-400 uppercase font-bold">Mar</p>
+                  <p className="font-bold text-lg text-indigo-600">{15 + i}</p>
+                </div>
+                <div>
+                  <p className="font-bold text-gray-800">Semester Assessment Period</p>
+                  <p className="text-xs text-gray-500">All Grades K-12 | Results via Moodle</p>
+                </div>
+              </div>
+              <span className="text-xs font-bold px-3 py-1 bg-indigo-100 text-indigo-700 rounded-lg">Official</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const AdmissionsModule = ({ students, onOpenModal, onViewRecord, onDeleteStudent }) => {
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h3 className="text-xl font-bold text-gray-900">Student Admissions</h3>
+          <p className="text-sm text-gray-500">System registry for K-12 and Language School enrollment</p>
+        </div>
+        <button 
+          onClick={onOpenModal}
+          className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all flex items-center shadow-lg shadow-indigo-200"
+        >
+          <UserPlus size={18} className="mr-2" />
+          Admit Student
+        </button>
+      </div>
+
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+        <table className="w-full text-left">
+          <thead className="bg-gray-50 text-gray-400 text-[10px] uppercase font-bold tracking-widest border-b">
+            <tr>
+              <th className="px-6 py-4">Student ID</th>
+              <th className="px-6 py-4">Full Name</th>
+              <th className="px-6 py-4">Grade / Level</th>
+              <th className="px-6 py-4">Status</th>
+              <th className="px-6 py-4 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y text-sm">
+            {students.length > 0 ? (
+              students.map(student => (
+                <tr key={student.id} className="hover:bg-gray-50 transition-colors group">
+                  <td className="px-6 py-4 font-mono text-xs font-bold text-indigo-600">{student.id}</td>
+                  <td className="px-6 py-4">
+                    <div>
+                      <p className="font-bold text-gray-900">{student.name}</p>
+                      <p className="text-xs text-gray-400">{student.email}</p>
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 font-medium text-gray-600">{student.level}</td>
+                  <td className="px-6 py-4">
+                    <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wide ${
+                      student.status === 'Active' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'
+                    }`}>
+                      {student.status}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-right space-x-2">
+                    <button 
+                      onClick={() => onViewRecord(student)}
+                      className="text-indigo-600 hover:text-white font-bold text-xs px-3 py-1.5 hover:bg-indigo-600 border border-indigo-100 rounded-lg transition-all"
+                    >
+                      View Record
+                    </button>
+                    <button 
+                      onClick={() => {
+                        if(confirm(`Are you sure you want to delete ${student.name}?`)) {
+                           onDeleteStudent(student.id);
+                        }
+                      }}
+                      className="text-gray-400 hover:text-red-600 p-2 hover:bg-red-50 rounded-lg transition-all"
+                      title="Delete Student"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan="5" className="px-6 py-12 text-center text-gray-400 italic">No student records found.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+const StudentProfileModal = ({ student, onClose }) => {
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-indigo-950/40 backdrop-blur-sm p-4">
+      <div className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+        <div className="p-6 border-b flex justify-between items-center bg-indigo-900 text-white">
+          <div className="flex items-center space-x-4">
+            <div className="w-14 h-14 rounded-2xl bg-indigo-700 border-2 border-indigo-500/30 flex items-center justify-center font-bold text-2xl">
+              {student.name.charAt(0)}
+            </div>
+            <div>
+              <h4 className="text-xl font-bold">{student.name}</h4>
+              <p className="text-xs text-indigo-300 font-mono tracking-wider">{student.id} • {student.level}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+            <X size={24} />
+          </button>
+        </div>
+        
+        <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-8 bg-white">
+          {/* Identity Section */}
+          <div className="space-y-6">
+            <h5 className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-500 border-b pb-2">Personal Information</h5>
+            
+            <div className="grid grid-cols-2 gap-4">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-gray-50 rounded-lg"><Calendar size={16} className="text-gray-400" /></div>
+                <div>
+                  <p className="text-[10px] text-gray-400 font-bold uppercase">Age</p>
+                  <p className="text-sm font-semibold text-gray-900">{student.age || 'N/A'} Years</p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-gray-50 rounded-lg"><User size={16} className="text-gray-400" /></div>
+                <div>
+                  <p className="text-[10px] text-gray-400 font-bold uppercase">Gender</p>
+                  <p className="text-sm font-semibold text-gray-900">{student.gender || 'N/A'}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-3">
+              <div className="p-2 bg-gray-50 rounded-lg"><Phone size={16} className="text-gray-400" /></div>
+              <div>
+                <p className="text-[10px] text-gray-400 font-bold uppercase">Phone Number</p>
+                <p className="text-sm font-semibold text-gray-900">{student.phone || 'Not Provided'}</p>
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-3">
+              <div className="p-2 bg-gray-50 rounded-lg"><MapPin size={16} className="text-gray-400" /></div>
+              <div>
+                <p className="text-[10px] text-gray-400 font-bold uppercase">Residential Location</p>
+                <p className="text-sm font-semibold text-gray-900">{student.location || 'Unknown'}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Academic/Financial Section */}
+          <div className="space-y-6">
+            <h5 className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-500 border-b pb-2">Academic Standing</h5>
+            
+            <div>
+              <p className="text-[10px] text-gray-400 font-bold uppercase mb-1">Status</p>
+              <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                student.status === 'Active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+              }`}>
+                {student.status}
+              </span>
+            </div>
+
+            <div>
+              <p className="text-[10px] text-gray-400 font-bold uppercase mb-1">Financial Balance</p>
+              <p className={`text-xl font-black ${student.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                {student.balance.toLocaleString()} <span className="text-sm font-normal text-gray-400">ETB</span>
+              </p>
+              <p className="text-[10px] text-gray-400 mt-1 italic">Last payment sync: Today</p>
+            </div>
+
+            <div className="bg-indigo-50 rounded-2xl p-4 flex items-start space-x-3 border border-indigo-100/50">
+              <Info size={18} className="text-indigo-600 mt-0.5 shrink-0" />
+              <p className="text-[11px] text-indigo-700/70 leading-relaxed font-medium">
+                This student is synchronized with the <strong>Moodle LMS</strong> via API. Changes to level or status are reflected in the learning portal immediately.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6 bg-gray-50 border-t flex justify-end items-center space-x-4">
+          <button 
+            className="text-indigo-600 text-sm font-bold hover:bg-indigo-100 px-4 py-2 rounded-xl transition-colors"
+          >
+            Edit Profile
+          </button>
+          <button 
+            onClick={onClose}
+            className="px-8 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
+          >
+            Close Record
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const CurriculumModule = ({ courses, onOpenModal, onDelete }) => {
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h3 className="text-xl font-bold text-gray-900">Curriculum Management</h3>
+          <p className="text-sm text-gray-500">Configure academic structures and modules</p>
+        </div>
+        <button 
+          onClick={onOpenModal}
+          className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all flex items-center shadow-lg shadow-indigo-200"
+        >
+          <PlusCircle size={18} className="mr-2" />
+          Add Module
+        </button>
+      </div>
+
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+        <table className="w-full text-left">
+          <thead className="bg-gray-50 text-gray-400 text-[10px] uppercase font-bold tracking-widest border-b">
+            <tr>
+              <th className="px-6 py-4">Module Code</th>
+              <th className="px-6 py-4">Title</th>
+              <th className="px-6 py-4">Level</th>
+              <th className="px-6 py-4">Instructor</th>
+              <th className="px-6 py-4 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y text-sm">
+            {courses.map(course => (
+              <tr key={course.id} className="hover:bg-gray-50 transition-colors">
+                <td className="px-6 py-4 font-mono text-xs font-bold text-indigo-600">{course.id}</td>
+                <td className="px-6 py-4 font-bold text-gray-900">{course.name}</td>
+                <td className="px-6 py-4 font-medium text-gray-600">{course.level}</td>
+                <td className="px-6 py-4 text-gray-600">{course.faculty}</td>
+                <td className="px-6 py-4 text-right space-x-2">
+                  <button className="text-gray-400 hover:text-blue-600 p-2 rounded-lg transition-colors">
+                    <FileText size={16} />
+                  </button>
+                  <button 
+                    onClick={() => onDelete(course.id)}
+                    className="text-gray-400 hover:text-red-600 p-2 rounded-lg transition-colors"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+const CourseFormModal = ({ onClose, onSubmit }) => {
+  const [formData, setFormData] = useState({
+    id: '',
+    name: '',
+    level: 'Grade 1',
+    faculty: ''
+  });
+
+  const gradeLevels = [
+    "Kindergarten", "Grade 1", "Grade 2", "Grade 3", "Grade 4", "Grade 5", 
+    "Grade 6", "Grade 7", "Grade 8", "Grade 9", "Grade 10", "Grade 11", 
+    "Grade 12", "Beginner", "Intermediate", "Advanced"
+  ];
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!formData.id || !formData.name) return;
+    onSubmit(formData);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+        <div className="p-6 border-b flex justify-between items-center bg-indigo-900 text-white">
+          <h4 className="text-lg font-bold">Add Curriculum Module</h4>
+          <button onClick={onClose} className="p-1 hover:bg-white/10 rounded-lg transition-colors">
+            <X size={20} />
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-6 space-y-5">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Module Code</label>
+              <input 
+                required
+                type="text" 
+                placeholder="e.g. MATH-G5"
+                value={formData.id}
+                onChange={(e) => setFormData({...formData, id: e.target.value.toUpperCase()})}
+                className="w-full px-4 py-3 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-mono"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Target Level</label>
+              <select 
+                value={formData.level}
+                onChange={(e) => setFormData({...formData, level: e.target.value})}
+                className="w-full px-4 py-3 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+              >
+                {gradeLevels.map(lvl => <option key={lvl} value={lvl}>{lvl}</option>)}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Module Title</label>
+            <input 
+              required
+              type="text" 
+              placeholder="e.g. Advanced Fractions"
+              value={formData.name}
+              onChange={(e) => setFormData({...formData, name: e.target.value})}
+              className="w-full px-4 py-3 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Assigned Instructor</label>
+            <input 
+              required
+              type="text" 
+              placeholder="e.g. Dr. Almaz"
+              value={formData.faculty}
+              onChange={(e) => setFormData({...formData, faculty: e.target.value})}
+              className="w-full px-4 py-3 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+            />
+          </div>
+          <div className="pt-4">
+            <button 
+              type="submit"
+              className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold hover:bg-indigo-700 transition-all flex items-center justify-center shadow-lg shadow-indigo-100"
+            >
+              Add to Curriculum
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+const AdmissionFormModal = ({ onClose, onSubmit }) => {
+  const [formData, setFormData] = useState({
+    id: `STU${Math.floor(Math.random() * 900) + 100}`,
+    name: '',
+    email: '',
+    level: 'Grade 1',
+    age: '',
+    gender: 'Male',
+    phone: '',
+    location: ''
+  });
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!formData.name || !formData.email) return;
+    onSubmit(formData);
+  };
+
+  const gradeOptions = [
+    { label: "Elementary (K-8)", options: ["Kindergarten", "Grade 1", "Grade 2", "Grade 3", "Grade 4", "Grade 5", "Grade 6", "Grade 7", "Grade 8"] },
+    { label: "Secondary (9-12)", options: ["Grade 9", "Grade 10", "Grade 11", "Grade 12"] },
+    { label: "Language Proficiency", options: ["Beginner", "Intermediate", "Advanced"] }
+  ];
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 overflow-y-auto">
+      <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200 my-8">
+        <div className="p-6 border-b flex justify-between items-center bg-indigo-900 text-white">
+          <h4 className="text-lg font-bold text-white">Manual Admission Form</h4>
+          <button onClick={onClose} className="p-1 hover:bg-white/10 rounded-lg transition-colors text-white">
+            <X size={20} />
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Full Name</label>
+              <input 
+                required
+                type="text" 
+                placeholder="Abebe Bekele"
+                value={formData.name}
+                onChange={(e) => setFormData({...formData, name: e.target.value})}
+                className="w-full px-4 py-2.5 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all focus:bg-white"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Email Address</label>
+              <input 
+                required
+                type="email" 
+                placeholder="student@edu.et"
+                value={formData.email}
+                onChange={(e) => setFormData({...formData, email: e.target.value})}
+                className="w-full px-4 py-2.5 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all focus:bg-white"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+             <div>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Age</label>
+              <input 
+                type="number" 
+                placeholder="Years"
+                value={formData.age}
+                onChange={(e) => setFormData({...formData, age: e.target.value})}
+                className="w-full px-4 py-2.5 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all focus:bg-white"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Gender</label>
+              <select 
+                value={formData.gender}
+                onChange={(e) => setFormData({...formData, gender: e.target.value})}
+                className="w-full px-4 py-2.5 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all focus:bg-white"
+              >
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Phone Number</label>
+            <input 
+              type="tel" 
+              placeholder="+251 9XX XXXXXX"
+              value={formData.phone}
+              onChange={(e) => setFormData({...formData, phone: e.target.value})}
+              className="w-full px-4 py-2.5 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all focus:bg-white"
+            />
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Location / Address</label>
+            <input 
+              type="text" 
+              placeholder="e.g. Addis Ababa, Bole"
+              value={formData.location}
+              onChange={(e) => setFormData({...formData, location: e.target.value})}
+              className="w-full px-4 py-2.5 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all focus:bg-white"
+            />
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Grade / Level Assignment</label>
+            <select 
+              value={formData.level}
+              onChange={(e) => setFormData({...formData, level: e.target.value})}
+              className="w-full px-4 py-2.5 border border-gray-100 bg-gray-50 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm transition-all focus:bg-white"
+            >
+              {gradeOptions.map(group => (
+                <optgroup key={group.label} label={group.label}>
+                  {group.options.map(opt => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </div>
+
+          <div className="pt-4">
+            <button 
+              type="submit"
+              className="w-full bg-indigo-600 text-white py-4 rounded-2xl font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-100 transition-all flex items-center justify-center"
+            >
+              Confirm Admission
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+const StudentRegistration = ({ courses }) => {
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+      <div className="p-6 border-b">
+        <h3 className="text-lg font-bold">Available Class Modules</h3>
+      </div>
+      <table className="w-full text-left">
+        <thead className="bg-gray-50 text-gray-400 text-[10px] uppercase font-bold tracking-widest">
+          <tr>
+            <th className="px-6 py-4 text-center">Module Code</th>
+            <th className="px-6 py-4">Title</th>
+            <th className="px-6 py-4 text-center">Level</th>
+            <th className="px-6 py-4">Assigned Teacher</th>
+            <th className="px-6 py-4 text-right">Action</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y text-sm">
+          {courses.map(course => (
+            <tr key={course.id} className="hover:bg-gray-50 transition-colors">
+              <td className="px-6 py-4 font-mono font-bold text-indigo-600 text-center">{course.id}</td>
+              <td className="px-6 py-4 font-bold text-gray-900">{course.name}</td>
+              <td className="px-6 py-4 text-center font-medium text-gray-500">{course.level}</td>
+              <td className="px-6 py-4 text-gray-600">{course.faculty}</td>
+              <td className="px-6 py-4 text-right">
+                <button className="bg-indigo-600 text-white px-4 py-1.5 rounded-xl text-xs font-bold hover:bg-indigo-700 transition-colors">
+                  Enroll
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+const FacultyRoster = ({ students }) => {
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+      <div className="p-6 border-b flex justify-between items-center bg-gray-50/50">
+        <h3 className="text-lg font-bold">Class List: Grade 5 Mathematics</h3>
+        <button className="text-indigo-600 flex items-center space-x-1 text-sm font-bold hover:bg-indigo-50 px-3 py-1.5 rounded-lg transition-colors">
+          <LinkIcon size={14} />
+          <span>Launch Moodle Classroom</span>
+        </button>
+      </div>
+      <table className="w-full text-left">
+        <thead className="bg-gray-50 text-gray-400 text-[10px] uppercase font-bold tracking-widest">
+          <tr>
+            <th className="px-6 py-4">ID</th>
+            <th className="px-6 py-4">Student Name</th>
+            <th className="px-6 py-4">Level</th>
+            <th className="px-6 py-4">Status</th>
+            <th className="px-6 py-4 text-right">Manage</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y text-sm">
+          {students.map(student => (
+            <tr key={student.id} className="hover:bg-gray-50 transition-colors">
+              <td className="px-6 py-4 font-mono font-bold text-indigo-600">{student.id}</td>
+              <td className="px-6 py-4 font-bold text-gray-900">{student.name}</td>
+              <td className="px-6 py-4 font-medium">{student.level}</td>
+              <td className="px-6 py-4">
+                <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wide ${
+                  student.status === 'Active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                }`}>
+                  {student.status}
+                </span>
+              </td>
+              <td className="px-6 py-4 text-right space-x-3">
+                <button className="text-indigo-600 text-xs font-bold hover:underline">Profile</button>
+                <button className="text-indigo-600 text-xs font-bold hover:underline">Assess</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+const AdminMoodleSync = () => {
+  return (
+    <div className="space-y-6">
+      <div className="bg-indigo-900 border border-indigo-100 p-8 rounded-3xl flex items-start space-x-6 text-white shadow-xl shadow-indigo-100">
+        <div className="bg-white/10 p-4 rounded-2xl backdrop-blur-md">
+          <LinkIcon size={32} className="text-indigo-300" />
+        </div>
+        <div>
+          <h3 className="text-xl font-black uppercase tracking-tight text-white">Moodle Sync Hub</h3>
+          <p className="text-indigo-200 text-sm mt-1 max-w-md">
+            Bi-directional synchronization is active. Enrollment in SMS grades/levels automatically updates Moodle course cohorts.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <h4 className="font-bold mb-4 flex items-center text-gray-800">
+            <CheckCircle className="text-green-500 mr-2" size={18} />
+            Auto-Sync Integrity Logs
+          </h4>
+          <div className="space-y-3 font-mono text-[10px]">
+            <p className="text-green-600 bg-green-50 p-2.5 rounded-xl border border-green-100">[10:00:02] Successfully synced 128 students to Moodle.</p>
+            <p className="text-green-600 bg-green-50 p-2.5 rounded-xl border border-green-100">[10:00:05] Grade level cohorts generated.</p>
+            <p className="text-orange-600 bg-orange-50 p-2.5 rounded-xl border border-orange-100">[09:55:00] Warning: Level update delayed for STU045.</p>
+          </div>
+        </div>
+
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+          <h4 className="font-bold mb-4 text-gray-800">Moodle Control Center</h4>
+          <div className="space-y-3">
+            <button className="w-full text-left px-4 py-3 border border-gray-100 rounded-xl hover:bg-indigo-50 hover:border-indigo-100 text-sm font-bold flex justify-between items-center transition-all group">
+              <span>Force Level Re-Sync</span>
+              <span className="text-gray-400 group-hover:text-indigo-600">→</span>
+            </button>
+            <button className="w-full text-left px-4 py-3 border border-gray-100 rounded-xl hover:bg-indigo-50 hover:border-indigo-100 text-sm font-bold flex justify-between items-center transition-all group">
+              <span>Sync Teacher Level Permissions</span>
+              <span className="text-gray-400 group-hover:text-indigo-600">→</span>
+            </button>
+            <button className="w-full text-left px-4 py-3 border border-gray-100 rounded-xl hover:bg-indigo-50 hover:border-indigo-100 text-sm font-bold flex justify-between items-center transition-all group">
+              <span>Configure Moodle API</span>
+              <span className="text-gray-400 group-hover:text-indigo-600">→</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default App;
+
+
