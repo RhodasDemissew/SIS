@@ -100,6 +100,14 @@ const INITIAL_STUDENTS = [
 const SIS_TOKEN_KEY = 'sis_token';
 const SIS_ACTIVE_ROLE_KEY = 'sis_active_role';
 const SIS_ALLOWED_ROLES = ['admin', 'student'];
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
+
+function buildApiUrl(path) {
+  if (!API_BASE_URL) return path;
+  if (/^https?:\/\//i.test(path)) return path;
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  return `${API_BASE_URL}${normalized}`;
+}
 
 function apiFetch(url, options = {}) {
   const token = typeof window !== 'undefined' ? window.localStorage.getItem(SIS_TOKEN_KEY) : null;
@@ -108,7 +116,7 @@ function apiFetch(url, options = {}) {
   if (!headers['Accept'] && !headers['accept']) headers['Accept'] = 'application/json';
   if (token) headers['Authorization'] = `Bearer ${token}`;
   if (activeRole && SIS_ALLOWED_ROLES.includes(activeRole)) headers['X-SIS-ROLE'] = activeRole;
-  return fetch(url, { ...options, headers }).then((res) => {
+  return fetch(buildApiUrl(url), { ...options, headers }).then((res) => {
     if (res.status === 401 && typeof window !== 'undefined') {
       window.localStorage.removeItem(SIS_TOKEN_KEY);
       window.localStorage.removeItem(SIS_ACTIVE_ROLE_KEY);
@@ -142,7 +150,7 @@ const LandingLogin = ({ onLogin }) => {
     }
     setLoading(true);
     try {
-      const res = await fetch('/api/login', {
+      const res = await fetch(buildApiUrl('/api/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify({ username: username.trim(), password }),

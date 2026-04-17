@@ -1,12 +1,18 @@
 <?php
 
+$rawOrigins = (string) env('CORS_ALLOWED_ORIGINS', 'http://localhost:5173');
+$allowedOrigins = array_values(array_filter(array_map(
+    static fn (string $origin): string => trim($origin),
+    explode(',', $rawOrigins)
+)));
+
 return [
 
     'paths' => ['api/*'],
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => ['http://localhost:5173'],
+    'allowed_origins' => $allowedOrigins,
 
     'allowed_origins_patterns' => [],
 
