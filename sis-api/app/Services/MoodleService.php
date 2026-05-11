@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Http;
 
 class MoodleService
 {
+    private const POOL_CHUNK_SIZE = 20;
     protected string $baseUrl;
 
     protected ?string $token;
@@ -254,29 +255,31 @@ class MoodleService
             'userid' => $moodleUserId,
         ]);
 
-        $responses = Http::pool(function ($pool) use ($ids, $urlBase, $baseQuery) {
-            $reqs = [];
-            foreach ($ids as $cid) {
-                $reqs[] = $pool->connectTimeout($this->connectTimeoutSeconds)
-                    ->timeout($this->timeoutSeconds)
-                    ->get($urlBase, array_merge($baseQuery, ['courseid' => $cid]));
-            }
-            return $reqs;
-        });
-
         $out = [];
-        foreach ($ids as $index => $cid) {
-            $res = $responses[$index] ?? null;
-            if (! $res || ! $res->successful()) {
-                $out[$cid] = null;
-                continue;
+        foreach (array_chunk($ids, self::POOL_CHUNK_SIZE) as $chunk) {
+            $responses = Http::pool(function ($pool) use ($chunk, $urlBase, $baseQuery) {
+                $reqs = [];
+                foreach ($chunk as $cid) {
+                    $reqs[] = $pool->connectTimeout($this->connectTimeoutSeconds)
+                        ->timeout($this->timeoutSeconds)
+                        ->get($urlBase, array_merge($baseQuery, ['courseid' => $cid]));
+                }
+                return $reqs;
+            });
+
+            foreach ($chunk as $index => $cid) {
+                $res = $responses[$index] ?? null;
+                if (! $res || ! $res->successful()) {
+                    $out[$cid] = null;
+                    continue;
+                }
+                $json = $res->json();
+                if (! is_array($json) || isset($json['exception'])) {
+                    $out[$cid] = null;
+                    continue;
+                }
+                $out[$cid] = $json;
             }
-            $json = $res->json();
-            if (! is_array($json) || isset($json['exception'])) {
-                $out[$cid] = null;
-                continue;
-            }
-            $out[$cid] = $json;
         }
 
         return $out;
@@ -305,29 +308,31 @@ class MoodleService
             'courseid' => $courseId,
         ]);
 
-        $responses = Http::pool(function ($pool) use ($ids, $urlBase, $baseQuery) {
-            $reqs = [];
-            foreach ($ids as $uid) {
-                $reqs[] = $pool->connectTimeout($this->connectTimeoutSeconds)
-                    ->timeout($this->timeoutSeconds)
-                    ->get($urlBase, array_merge($baseQuery, ['userid' => $uid]));
-            }
-            return $reqs;
-        });
-
         $out = [];
-        foreach ($ids as $i => $uid) {
-            $res = $responses[$i] ?? null;
-            if (! $res || ! $res->successful()) {
-                $out[$uid] = null;
-                continue;
+        foreach (array_chunk($ids, self::POOL_CHUNK_SIZE) as $chunk) {
+            $responses = Http::pool(function ($pool) use ($chunk, $urlBase, $baseQuery) {
+                $reqs = [];
+                foreach ($chunk as $uid) {
+                    $reqs[] = $pool->connectTimeout($this->connectTimeoutSeconds)
+                        ->timeout($this->timeoutSeconds)
+                        ->get($urlBase, array_merge($baseQuery, ['userid' => $uid]));
+                }
+                return $reqs;
+            });
+
+            foreach ($chunk as $i => $uid) {
+                $res = $responses[$i] ?? null;
+                if (! $res || ! $res->successful()) {
+                    $out[$uid] = null;
+                    continue;
+                }
+                $json = $res->json();
+                if (! is_array($json) || isset($json['exception'])) {
+                    $out[$uid] = null;
+                    continue;
+                }
+                $out[$uid] = $json;
             }
-            $json = $res->json();
-            if (! is_array($json) || isset($json['exception'])) {
-                $out[$uid] = null;
-                continue;
-            }
-            $out[$uid] = $json;
         }
 
         return $out;
@@ -400,30 +405,32 @@ class MoodleService
             'field' => 'category',
         ]);
 
-        $responses = Http::pool(function ($pool) use ($ids, $urlBase, $baseQuery) {
-            $reqs = [];
-            foreach ($ids as $cid) {
-                $reqs[] = $pool->connectTimeout($this->connectTimeoutSeconds)
-                    ->timeout($this->timeoutSeconds)
-                    ->get($urlBase, array_merge($baseQuery, ['value' => $cid]));
-            }
-            return $reqs;
-        });
-
         $out = [];
-        foreach ($ids as $index => $cid) {
-            $res = $responses[$index] ?? null;
-            if (! $res || ! $res->successful()) {
-                $out[$cid] = null;
-                continue;
-            }
-            $json = $res->json();
-            if (isset($json['courses']) && is_array($json['courses'])) {
-                $out[$cid] = $json['courses'];
-            } elseif (is_array($json)) {
-                $out[$cid] = $json;
-            } else {
-                $out[$cid] = null;
+        foreach (array_chunk($ids, self::POOL_CHUNK_SIZE) as $chunk) {
+            $responses = Http::pool(function ($pool) use ($chunk, $urlBase, $baseQuery) {
+                $reqs = [];
+                foreach ($chunk as $cid) {
+                    $reqs[] = $pool->connectTimeout($this->connectTimeoutSeconds)
+                        ->timeout($this->timeoutSeconds)
+                        ->get($urlBase, array_merge($baseQuery, ['value' => $cid]));
+                }
+                return $reqs;
+            });
+
+            foreach ($chunk as $index => $cid) {
+                $res = $responses[$index] ?? null;
+                if (! $res || ! $res->successful()) {
+                    $out[$cid] = null;
+                    continue;
+                }
+                $json = $res->json();
+                if (isset($json['courses']) && is_array($json['courses'])) {
+                    $out[$cid] = $json['courses'];
+                } elseif (is_array($json)) {
+                    $out[$cid] = $json;
+                } else {
+                    $out[$cid] = null;
+                }
             }
         }
 
@@ -468,25 +475,27 @@ class MoodleService
 
         [$urlBase, $baseQuery] = $this->buildCall('core_enrol_get_enrolled_users', []);
 
-        $responses = Http::pool(function ($pool) use ($ids, $urlBase, $baseQuery) {
-            $reqs = [];
-            foreach ($ids as $courseId) {
-                $reqs[] = $pool->connectTimeout($this->connectTimeoutSeconds)
-                    ->timeout($this->timeoutSeconds)
-                    ->get($urlBase, array_merge($baseQuery, ['courseid' => $courseId]));
-            }
-            return $reqs;
-        });
-
         $out = [];
-        foreach ($ids as $index => $courseId) {
-            $res = $responses[$index] ?? null;
-            if (! $res || ! $res->successful()) {
-                $out[$courseId] = null;
-                continue;
+        foreach (array_chunk($ids, self::POOL_CHUNK_SIZE) as $chunk) {
+            $responses = Http::pool(function ($pool) use ($chunk, $urlBase, $baseQuery) {
+                $reqs = [];
+                foreach ($chunk as $courseId) {
+                    $reqs[] = $pool->connectTimeout($this->connectTimeoutSeconds)
+                        ->timeout($this->timeoutSeconds)
+                        ->get($urlBase, array_merge($baseQuery, ['courseid' => $courseId]));
+                }
+                return $reqs;
+            });
+
+            foreach ($chunk as $index => $courseId) {
+                $res = $responses[$index] ?? null;
+                if (! $res || ! $res->successful()) {
+                    $out[$courseId] = null;
+                    continue;
+                }
+                $json = $res->json();
+                $out[$courseId] = is_array($json) ? $json : null;
             }
-            $json = $res->json();
-            $out[$courseId] = is_array($json) ? $json : null;
         }
 
         return $out;

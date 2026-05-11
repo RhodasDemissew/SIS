@@ -37,6 +37,11 @@ class MoodleController extends Controller
         return null;
     }
 
+    private function canForceRefresh(Request $request): bool
+    {
+        return $request->boolean('refresh', false) && $this->activeRole($request) !== 'student';
+    }
+
     /**
      * Link a student to Moodle by email (set moodle_user_id).
      */
@@ -121,14 +126,14 @@ class MoodleController extends Controller
             return response()->json(['message' => 'Moodle is not configured'], 503);
         }
 
-        $forceRefresh = request()->boolean('refresh', false);
+        $forceRefresh = $this->canForceRefresh($request);
         $cacheKey = 'moodle_site_students';
 
         if ($forceRefresh) {
             Cache::forget($cacheKey);
         }
 
-        $payload = Cache::remember($cacheKey, now()->addSeconds(60), function () {
+        $payload = Cache::remember($cacheKey, now()->addMinutes(10), function () {
             $cats = $this->moodle->getCourseCategories();
             if ($cats === null) {
                 return null;
@@ -216,7 +221,7 @@ class MoodleController extends Controller
             return response()->json(['message' => 'Moodle is not configured'], 503);
         }
 
-        $forceRefresh = request()->boolean('refresh', false);
+        $forceRefresh = $this->canForceRefresh($request);
         $cacheKey = 'moodle_overview_metrics';
 
         if ($forceRefresh) {
@@ -364,7 +369,7 @@ class MoodleController extends Controller
 
         $courseIdInt = (int) $courseId;
 
-        $forceRefresh = request()->boolean('refresh', false);
+        $forceRefresh = $this->canForceRefresh($request);
 
         // Cache the transformed list for a short period to speed up repeated requests.
         $cacheKey = 'moodle_course_students_'.$courseIdInt;
@@ -375,7 +380,7 @@ class MoodleController extends Controller
 
         // NOTE: This endpoint can be slow because Moodle grades are fetched per student.
         // We use short TTL + parallel fetching to keep it responsive while staying fresh.
-        $payload = Cache::remember($cacheKey, now()->addSeconds(60), function () use ($courseIdInt) {
+        $payload = Cache::remember($cacheKey, now()->addMinutes(5), function () use ($courseIdInt) {
             $users = $this->moodle->getEnrolledUsers($courseIdInt);
             if ($users === null) {
                 return null;
@@ -563,77 +568,90 @@ class MoodleController extends Controller
                 return response()->json(['message' => 'Forbidden for student role'], 403);
             }
         }
-        $gradesData = $this->moodle->getCourseGrades($moodleUserIdInt);
+        $forceRefresh = $this->canForceRefresh($request);
+        $cacheKey = 'moodle_student_report_'.$moodleUserIdInt;
+        if ($forceRefresh) {
+            Cache::forget($cacheKey);
+        }
 
-        if ($gradesData === null) {
+        $payload = Cache::remember($cacheKey, now()->addMinutes(5), function () use ($moodleUserIdInt) {
+            $gradesData = $this->moodle->getCourseGrades($moodleUserIdInt);
+            if ($gradesData === null) {
+                return null;
+            }
+
+            $courses = $this->moodle->getUserCourses($moodleUserIdInt) ?? [];
+            $courseNamesById = [];
+            foreach ($courses as $course) {
+                if (! isset($course['id'])) {
+                    continue;
+                }
+                $courseId = (int) $course['id'];
+                $courseNamesById[$courseId] = $course['fullname']
+                    ?? ($course['shortname'] ?? (string) $courseId);
+            }
+
+            $gradeItems = $gradesData['grades'] ?? $gradesData['courses'] ?? [];
+            if (! is_array($gradeItems)) {
+                $gradeItems = [];
+            }
+
+            $courseIds = [];
+            foreach ($gradeItems as $item) {
+                if (! is_array($item) || ! isset($item['courseid'])) {
+                    continue;
+                }
+                $courseIds[] = (int) $item['courseid'];
+            }
+            $courseIds = array_values(array_unique($courseIds));
+
+            $tablesByCourse = $this->moodle->getGradesTablesForCourses($moodleUserIdInt, $courseIds);
+
+            $out = [];
+            foreach ($gradeItems as $item) {
+                if (! is_array($item)) {
+                    continue;
+                }
+                $courseId = isset($item['courseid']) ? (int) $item['courseid'] : null;
+                $courseName = $item['coursefullname']
+                    ?? ($courseId !== null && isset($courseNamesById[$courseId]) ? $courseNamesById[$courseId] : null)
+                    ?? ($item['coursename'] ?? (string) ($courseId ?? 'Course'));
+                $grade = isset($item['grade']) ? (float) $item['grade'] : (isset($item['rawgrade']) ? (float) $item['rawgrade'] : null);
+                $maxGrade = isset($item['grademax']) ? (float) $item['grademax'] : null;
+
+                $percentage = null;
+                if ($courseId !== null && isset($tablesByCourse[$courseId]) && is_array($tablesByCourse[$courseId])) {
+                    $percentage = self::extractCourseTotalPercentage($tablesByCourse[$courseId]);
+                }
+
+                $out[] = [
+                    'course_id' => $courseId,
+                    'course_name' => $courseName,
+                    'grade' => $grade,
+                    'max_grade' => $maxGrade,
+                    'course_total_percentage' => $percentage,
+                ];
+            }
+
+            return [
+                'moodle_user_id' => $moodleUserIdInt,
+                'grades' => $out,
+            ];
+        });
+
+        if ($payload === null) {
             return response()->json([
                 'message' => 'Could not fetch grades from Moodle (check token and user permissions)',
             ], 502);
         }
 
-        $courses = $this->moodle->getUserCourses($moodleUserIdInt) ?? [];
-        $courseNamesById = [];
-        foreach ($courses as $course) {
-            if (! isset($course['id'])) {
-                continue;
-            }
-            $courseId = (int) $course['id'];
-            $courseNamesById[$courseId] = $course['fullname']
-                ?? ($course['shortname'] ?? (string) $courseId);
-        }
-
-        $gradeItems = $gradesData['grades'] ?? $gradesData['courses'] ?? [];
-        if (! is_array($gradeItems)) {
-            $gradeItems = [];
-        }
-
-        $courseIds = [];
-        foreach ($gradeItems as $item) {
-            if (! is_array($item) || ! isset($item['courseid'])) {
-                continue;
-            }
-            $courseIds[] = (int) $item['courseid'];
-        }
-        $courseIds = array_values(array_unique($courseIds));
-
-        $tablesByCourse = $this->moodle->getGradesTablesForCourses($moodleUserIdInt, $courseIds);
-
-        $out = [];
-        foreach ($gradeItems as $item) {
-            if (! is_array($item)) {
-                continue;
-            }
-            $courseId = isset($item['courseid']) ? (int) $item['courseid'] : null;
-            $courseName = $item['coursefullname']
-                ?? ($courseId !== null && isset($courseNamesById[$courseId]) ? $courseNamesById[$courseId] : null)
-                ?? ($item['coursename'] ?? (string) ($courseId ?? 'Course'));
-            $grade = isset($item['grade']) ? (float) $item['grade'] : (isset($item['rawgrade']) ? (float) $item['rawgrade'] : null);
-            $maxGrade = isset($item['grademax']) ? (float) $item['grademax'] : null;
-
-            $percentage = null;
-            if ($courseId !== null && isset($tablesByCourse[$courseId]) && is_array($tablesByCourse[$courseId])) {
-                $percentage = self::extractCourseTotalPercentage($tablesByCourse[$courseId]);
-            }
-
-            $out[] = [
-                'course_id' => $courseId,
-                'course_name' => $courseName,
-                'grade' => $grade,
-                'max_grade' => $maxGrade,
-                'course_total_percentage' => $percentage,
-            ];
-        }
-
-        return response()->json([
-            'moodle_user_id' => $moodleUserIdInt,
-            'grades' => $out,
-        ]);
+        return response()->json($payload);
     }
 
     /**
      * Get detailed grade items for a single course (like Moodle grade report).
      */
-    public function courseDetails(string $studentId, string $courseId): JsonResponse
+    public function courseDetails(Request $request, string $studentId, string $courseId): JsonResponse
     {
         $student = Student::find($studentId);
 
@@ -652,8 +670,15 @@ class MoodleController extends Controller
         $moodleUserId = (int) $student->moodle_user_id;
         $courseIdInt = (int) $courseId;
 
-        $table = $this->moodle->getGradesTable($moodleUserId, $courseIdInt);
+        $forceRefresh = $this->canForceRefresh($request);
+        $cacheKey = 'moodle_course_details_'.$student->id.'_'.$courseIdInt;
+        if ($forceRefresh) {
+            Cache::forget($cacheKey);
+        }
 
+        $table = Cache::remember($cacheKey, now()->addMinutes(3), function () use ($moodleUserId, $courseIdInt) {
+            return $this->moodle->getGradesTable($moodleUserId, $courseIdInt);
+        });
         if ($table === null) {
             return response()->json([
                 'message' => 'Could not fetch detailed grades from Moodle',
@@ -710,7 +735,15 @@ class MoodleController extends Controller
             return response()->json(['message' => 'Invalid moodleUserId or courseId'], 422);
         }
 
-        $table = $this->moodle->getGradesTable($moodleUserIdInt, $courseIdInt);
+        $forceRefresh = $this->canForceRefresh($request);
+        $cacheKey = 'moodle_course_details_direct_'.$moodleUserIdInt.'_'.$courseIdInt;
+        if ($forceRefresh) {
+            Cache::forget($cacheKey);
+        }
+
+        $table = Cache::remember($cacheKey, now()->addMinutes(3), function () use ($moodleUserIdInt, $courseIdInt) {
+            return $this->moodle->getGradesTable($moodleUserIdInt, $courseIdInt);
+        });
         if ($table === null) {
             return response()->json([
                 'message' => 'Could not fetch detailed grades from Moodle',

@@ -4,7 +4,6 @@ import {
   Users, 
   BookOpen, 
   GraduationCap, 
-  Settings, 
   LayoutDashboard, 
   ClipboardList, 
   CreditCard, 
@@ -12,7 +11,6 @@ import {
   LogOut,
   UserCircle,
   Link as LinkIcon,
-  Search,
   CheckCircle,
   AlertCircle,
   UserPlus,
@@ -99,6 +97,8 @@ const INITIAL_STUDENTS = [
 
 const SIS_TOKEN_KEY = 'sis_token';
 const SIS_ACTIVE_ROLE_KEY = 'sis_active_role';
+const SIS_LAST_ACTIVITY_KEY = 'sis_last_activity_at';
+const SIS_IDLE_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 hours
 const SIS_ALLOWED_ROLES = ['admin', 'student'];
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
 
@@ -133,6 +133,16 @@ function friendlyStatusMessage(status, fallback) {
   if (status === 401) return 'Your session expired. Please sign in again.';
   if (status === 403) return 'Access denied for your current role.';
   return fallback;
+}
+
+function InlineStateMessage({ type = 'info', children }) {
+  const tone =
+    type === 'error'
+      ? 'bg-red-50 border-red-100 text-red-700'
+      : type === 'warning'
+      ? 'bg-amber-50 border-amber-100 text-amber-700'
+      : 'bg-indigo-50 border-indigo-100 text-indigo-700';
+  return <div className={`rounded-2xl border px-4 py-3 text-sm ${tone}`}>{children}</div>;
 }
 
 const LandingLogin = ({ onLogin }) => {
@@ -192,7 +202,7 @@ const LandingLogin = ({ onLogin }) => {
               <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Username</label>
               <input
                 type="text"
-                placeholder="your Moodle username"
+                placeholder="your DNEC user name"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
@@ -215,7 +225,7 @@ const LandingLogin = ({ onLogin }) => {
               disabled={loading}
               className="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 disabled:opacity-70 transition-all shadow-lg shadow-indigo-100"
             >
-              {loading ? 'Signing in…' : 'Sign in with Moodle account'}
+              {loading ? 'Signing in…' : 'Sign in with DNEC account'}
             </button>
           </form>
         </div>
@@ -228,6 +238,7 @@ const App = () => {
   const location = useLocation();
   const [isLoggedIn, setIsLoggedIn] = useState(() => typeof window !== 'undefined' && !!window.localStorage.getItem(SIS_TOKEN_KEY));
   const [currentUser, setCurrentUser] = useState(null);
+  const [globalNotice, setGlobalNotice] = useState(null);
   const [userRole, setUserRole] = useState(() => {
     if (typeof window === 'undefined') return 'admin';
     return window.localStorage.getItem(SIS_ACTIVE_ROLE_KEY) || 'admin';
@@ -235,14 +246,14 @@ const App = () => {
   const pathname = (location.pathname || '/').replace(/^\//, '') || 'dashboard';
   const activeTab = pathname;
   const [students, setStudents] = useState(INITIAL_STUDENTS);
-  const [admissionsStudents, setAdmissionsStudents] = useState([]);
-  const [admissionsLoading, setAdmissionsLoading] = useState(false);
   const [courses, setCourses] = useState(INITIAL_COURSES);
-  const [showAdmissionModal, setShowAdmissionModal] = useState(false);
-  const [showCurriculumModal, setShowCurriculumModal] = useState(false);
-  const [selectedStudent, setSelectedStudent] = useState(null);
 
-  const handleLogin = React.useCallback(() => setIsLoggedIn(true), []);
+  const handleLogin = React.useCallback(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(SIS_LAST_ACTIVITY_KEY, String(Date.now()));
+    }
+    setIsLoggedIn(true);
+  }, []);
 
   const handleLogout = React.useCallback(() => {
     const hadToken = typeof window !== 'undefined' && !!window.localStorage.getItem(SIS_TOKEN_KEY);
@@ -251,6 +262,7 @@ const App = () => {
     }
     if (typeof window !== 'undefined') window.localStorage.removeItem(SIS_TOKEN_KEY);
     if (typeof window !== 'undefined') window.localStorage.removeItem(SIS_ACTIVE_ROLE_KEY);
+    if (typeof window !== 'undefined') window.localStorage.removeItem(SIS_LAST_ACTIVITY_KEY);
     setCurrentUser(null);
     setIsLoggedIn(false);
   }, []);
@@ -258,7 +270,10 @@ const App = () => {
   React.useEffect(() => {
     window.__sisOnUnauthorized = handleLogout;
     window.__sisOnForbidden = () => {
-      alert('Access denied for this action with your current role.');
+      setGlobalNotice({
+        type: 'warning',
+        message: 'Access denied for this action with your current role.',
+      });
     };
     return () => {
       window.__sisOnUnauthorized = null;
@@ -294,6 +309,54 @@ const App = () => {
     };
   }, [isLoggedIn, handleLogout]);
 
+  React.useEffect(() => {
+    if (!isLoggedIn || typeof window === 'undefined') return;
+
+    let lastWrite = 0;
+    const touchActivity = () => {
+      const now = Date.now();
+      // Throttle localStorage writes during high-frequency events.
+      if (now - lastWrite < 1000) return;
+      lastWrite = now;
+      window.localStorage.setItem(SIS_LAST_ACTIVITY_KEY, String(now));
+    };
+
+    const checkIdleTimeout = () => {
+      const raw = window.localStorage.getItem(SIS_LAST_ACTIVITY_KEY);
+      const lastActivityAt = raw ? Number(raw) : Date.now();
+      if (!Number.isFinite(lastActivityAt)) {
+        window.localStorage.setItem(SIS_LAST_ACTIVITY_KEY, String(Date.now()));
+        return;
+      }
+      if (Date.now() - lastActivityAt >= SIS_IDLE_TIMEOUT_MS) {
+        handleLogout();
+      }
+    };
+
+    // Initialize activity marker for current session.
+    touchActivity();
+
+    const activityEvents = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'click'];
+    activityEvents.forEach((evt) => window.addEventListener(evt, touchActivity, { passive: true }));
+    window.addEventListener('focus', touchActivity);
+    const onVisibilityChange = () => {
+      if (!document.hidden) {
+        checkIdleTimeout();
+        touchActivity();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    const intervalId = window.setInterval(checkIdleTimeout, 60 * 1000);
+
+    return () => {
+      activityEvents.forEach((evt) => window.removeEventListener(evt, touchActivity));
+      window.removeEventListener('focus', touchActivity);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.clearInterval(intervalId);
+    };
+  }, [isLoggedIn, handleLogout]);
+
   const menuItems = {
     student: [
       { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -302,80 +365,13 @@ const App = () => {
     ],
     admin: [
       { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-      { id: 'admissions', label: 'Admissions', icon: Users },
       { id: 'curriculum', label: 'Grades Explorer', icon: BookOpen },
       { id: 'moodle', label: 'DNEC EthioEducation LMS Sync', icon: LinkIcon },
-      { id: 'settings', label: 'Settings', icon: Settings },
     ]
   };
-
-  const loadAdmissionsStudents = React.useCallback(() => {
-    setAdmissionsLoading(true);
-    apiFetch('/api/students')
-      .then((res) => (res.ok ? res.json() : Promise.reject(res)))
-      .then((data) => setAdmissionsStudents(data.students || []))
-      .catch((res) => {
-        alert(friendlyStatusMessage(res?.status, 'Could not load students right now.'));
-        setAdmissionsStudents([]);
-      })
-      .finally(() => setAdmissionsLoading(false));
-  }, []);
-
-  React.useEffect(() => {
-    if (activeTab === 'admissions') loadAdmissionsStudents();
-  }, [activeTab, loadAdmissionsStudents]);
-
-  const handleAdmitStudent = async (formData) => {
-    try {
-      const res = await apiFetch('/api/students', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: formData.name,
-          email: formData.email,
-          age: formData.age || null,
-          gender: formData.gender || null,
-          phone: formData.phone || null,
-          location: formData.location || null,
-          grade_level: formData.level || null,
-        }),
-      });
-      const contentType = res.headers.get('content-type');
-      const isJson = contentType && contentType.includes('application/json');
-      const data = isJson ? await res.json() : {};
-      if (!res.ok) {
-        const msg = data.message || (isJson ? 'Failed to admit student' : `Server error (${res.status}). Please try again.`);
-        const detail = data.error || (data.errors ? JSON.stringify(data.errors) : null);
-        throw new Error(detail ? `${msg}\n\n${detail}` : msg);
-      }
-      if (!data.student) throw new Error('Invalid response from server.');
-      setAdmissionsStudents((prev) => [...prev, data.student]);
-      setShowAdmissionModal(false);
-    } catch (err) {
-      const msg = err.message || 'Could not save student right now. Please try again.';
-      alert(msg);
-    }
-  };
-
-  const handleDeleteStudent = async (id) => {
-    if (!confirm('Remove this student from the registry?')) return;
-    try {
-      const res = await apiFetch(`/api/students/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error(friendlyStatusMessage(res.status, 'Delete failed'));
-      setAdmissionsStudents((prev) => prev.filter((s) => s.id !== id));
-    } catch (err) {
-      alert(err?.message || 'Could not delete student.');
-    }
-  };
-
-  const handleAddCourse = (newCourse) => {
-    setCourses([...courses, newCourse]);
-    setShowCurriculumModal(false);
-  };
-
-  const handleDeleteCourse = (courseId) => {
-    setCourses(courses.filter(c => c.id !== courseId));
-  };
+  const activeMenuLabel =
+    menuItems[userRole]?.find((item) => item.id === activeTab)?.label ||
+    activeTab.replace('-', ' ');
 
   const renderContent = () => {
     if (userRole === 'student') {
@@ -388,6 +384,12 @@ const App = () => {
             />
           );
         case 'curriculum':
+          return (
+            <StudentCurriculumExplorer
+              moodleUserId={currentUser?.moodle_user_id}
+              studentName={currentUser?.name}
+            />
+          );
         case 'moodle':
           return <AdminMoodleSync lockedMoodleUserId={currentUser?.moodle_user_id} />;
         default:
@@ -407,16 +409,6 @@ const App = () => {
         return <StudentRegistration courses={courses} />;
       case 'roster':
         return <FacultyRoster students={students} />;
-      case 'admissions':
-        return (
-          <AdmissionsModule 
-            students={admissionsStudents}
-            loading={admissionsLoading}
-            onOpenModal={() => setShowAdmissionModal(true)} 
-            onViewRecord={(student) => setSelectedStudent({ ...student, level: student.grade_level || student.level, balance: student.balance ?? 0 })}
-            onDeleteStudent={handleDeleteStudent}
-          />
-        );
       case 'curriculum':
         return (
           <CurriculumModule />
@@ -516,47 +508,40 @@ const App = () => {
           <div className="flex items-center text-gray-400 space-x-2">
             <span className="capitalize text-[10px] font-black tracking-widest bg-gray-100 px-2 py-1 rounded text-gray-500">{userRole}</span>
             <span className="text-gray-300">/</span>
-            <span className="text-gray-900 font-semibold capitalize">{activeTab.replace('-', ' ')}</span>
+            <span className="text-gray-900 font-semibold">{activeMenuLabel}</span>
           </div>
-          <div className="flex items-center space-x-4">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
-              <input 
-                type="text" 
-                placeholder="Search students, modules..." 
-                className="pl-9 pr-4 py-2 border border-gray-100 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 w-64 bg-gray-50 transition-all focus:bg-white"
-              />
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center">
+              <UserCircle size={16} />
             </div>
-            <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-xs">
-              {userRole[0].toUpperCase()}
+            <div className="flex flex-col items-end leading-tight">
+              <p className="text-sm font-semibold text-gray-900">{currentUser?.name || 'User'}</p>
+              <p className="text-xs text-gray-500">{currentUser?.email || 'No email available'}</p>
             </div>
           </div>
         </header>
 
         <main className="p-8 overflow-y-auto flex-1">
+          {globalNotice && (
+            <div className="mb-4">
+              <InlineStateMessage type={globalNotice.type}>
+                <div className="flex items-center justify-between gap-3">
+                  <span>{globalNotice.message}</span>
+                  <button
+                    type="button"
+                    onClick={() => setGlobalNotice(null)}
+                    className="text-xs font-semibold opacity-80 hover:opacity-100"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </InlineStateMessage>
+            </div>
+          )}
           {renderContent()}
         </main>
       </div>
 
-      {/* Modals */}
-      {showAdmissionModal && (
-        <AdmissionFormModal 
-          onClose={() => setShowAdmissionModal(false)} 
-          onSubmit={handleAdmitStudent} 
-        />
-      )}
-      {showCurriculumModal && (
-        <CourseFormModal 
-          onClose={() => setShowCurriculumModal(false)} 
-          onSubmit={handleAddCourse} 
-        />
-      )}
-      {selectedStudent && (
-        <StudentProfileModal 
-          student={selectedStudent} 
-          onClose={() => setSelectedStudent(null)} 
-        />
-      )}
     </div>
   );
 };
@@ -747,11 +732,7 @@ const Dashboard = ({ role }) => {
         </div>
       </div>
 
-      {error && (
-        <div className="bg-red-50 border border-red-100 text-red-700 text-sm px-4 py-3 rounded-2xl">
-          {error}
-        </div>
-      )}
+      {error && <InlineStateMessage type="error">{error}</InlineStateMessage>}
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
@@ -1122,6 +1103,7 @@ const CurriculumModule = () => {
   const [studentSearch, setStudentSearch] = useState('');
   const [sortDir, setSortDir] = useState('desc');
   const [studentsPage, setStudentsPage] = useState(1);
+  const deferredStudentSearch = React.useDeferredValue(studentSearch);
 
   useEffect(() => {
     let alive = true;
@@ -1235,35 +1217,45 @@ const CurriculumModule = () => {
     }));
   };
 
-  const selectedForCompare = courseStudents.filter((s) => compareSelected[s.moodle_user_id]);
-  const leaderboard = [...selectedForCompare].sort((a, b) => {
-    const pa = a.course_total_percentage;
-    const pb = b.course_total_percentage;
-    if (pa == null && pb == null) return 0;
-    if (pa == null) return 1;
-    if (pb == null) return -1;
-    return pb - pa;
-  });
+  const selectedForCompare = React.useMemo(
+    () => courseStudents.filter((s) => compareSelected[s.moodle_user_id]),
+    [courseStudents, compareSelected]
+  );
+  const leaderboard = React.useMemo(() => {
+    return [...selectedForCompare].sort((a, b) => {
+      const pa = a.course_total_percentage;
+      const pb = b.course_total_percentage;
+      if (pa == null && pb == null) return 0;
+      if (pa == null) return 1;
+      if (pb == null) return -1;
+      return pb - pa;
+    });
+  }, [selectedForCompare]);
 
-  const filteredStudents = courseStudents.filter((s) => {
-    if (!studentSearch.trim()) return true;
-    const q = studentSearch.toLowerCase();
-    return (
-      (s.fullname || '').toLowerCase().includes(q) ||
-      (s.email || '').toLowerCase().includes(q)
+  const filteredStudents = React.useMemo(() => {
+    const query = deferredStudentSearch.trim().toLowerCase();
+    if (!query) return courseStudents;
+    return courseStudents.filter((s) =>
+      (s.fullname || '').toLowerCase().includes(query) ||
+      (s.email || '').toLowerCase().includes(query)
     );
-  });
+  }, [courseStudents, deferredStudentSearch]);
 
-  const sortedStudents = [...filteredStudents].sort((a, b) => {
-    const pa = a.course_total_percentage;
-    const pb = b.course_total_percentage;
-    if (pa == null && pb == null) return 0;
-    if (pa == null) return sortDir === 'desc' ? 1 : -1;
-    if (pb == null) return sortDir === 'desc' ? -1 : 1;
-    return sortDir === 'desc' ? pb - pa : pa - pb;
-  });
+  const sortedStudents = React.useMemo(() => {
+    return [...filteredStudents].sort((a, b) => {
+      const pa = a.course_total_percentage;
+      const pb = b.course_total_percentage;
+      if (pa == null && pb == null) return 0;
+      if (pa == null) return sortDir === 'desc' ? 1 : -1;
+      if (pb == null) return sortDir === 'desc' ? -1 : 1;
+      return sortDir === 'desc' ? pb - pa : pa - pb;
+    });
+  }, [filteredStudents, sortDir]);
   const studentsPageSize = 25;
-  const studentsTotalPages = Math.max(1, Math.ceil(sortedStudents.length / studentsPageSize));
+  const studentsTotalPages = React.useMemo(
+    () => Math.max(1, Math.ceil(sortedStudents.length / studentsPageSize)),
+    [sortedStudents.length]
+  );
   const pagedSortedStudents = React.useMemo(() => {
     const start = (studentsPage - 1) * studentsPageSize;
     return sortedStudents.slice(start, start + studentsPageSize);
@@ -1271,39 +1263,41 @@ const CurriculumModule = () => {
 
   useEffect(() => {
     setStudentsPage(1);
-  }, [selectedCourse?.id, studentSearch, sortDir]);
+  }, [selectedCourse?.id, deferredStudentSearch, sortDir]);
 
   useEffect(() => {
     if (studentsPage > studentsTotalPages) setStudentsPage(studentsTotalPages);
   }, [studentsPage, studentsTotalPages]);
 
-  const nonNullStudents = courseStudents.filter((s) => s.course_total_percentage != null);
+  const nonNullStudents = React.useMemo(
+    () => courseStudents.filter((s) => s.course_total_percentage != null),
+    [courseStudents]
+  );
   const studentCount = courseStudents.length;
-  const avgPct =
-    nonNullStudents.length > 0
-      ? nonNullStudents.reduce((sum, s) => sum + (s.course_total_percentage || 0), 0) /
-        nonNullStudents.length
-      : null;
-  const minPct =
-    nonNullStudents.length > 0
-      ? nonNullStudents.reduce(
-          (min, s) =>
-            s.course_total_percentage != null && s.course_total_percentage < min
-              ? s.course_total_percentage
-              : min,
-          nonNullStudents[0].course_total_percentage
-        )
-      : null;
-  const maxPct =
-    nonNullStudents.length > 0
-      ? nonNullStudents.reduce(
-          (max, s) =>
-            s.course_total_percentage != null && s.course_total_percentage > max
-              ? s.course_total_percentage
-              : max,
-          nonNullStudents[0].course_total_percentage
-        )
-      : null;
+  const avgPct = React.useMemo(() => {
+    if (nonNullStudents.length === 0) return null;
+    return nonNullStudents.reduce((sum, s) => sum + (s.course_total_percentage || 0), 0) / nonNullStudents.length;
+  }, [nonNullStudents]);
+  const minPct = React.useMemo(() => {
+    if (nonNullStudents.length === 0) return null;
+    return nonNullStudents.reduce(
+      (min, s) =>
+        s.course_total_percentage != null && s.course_total_percentage < min
+          ? s.course_total_percentage
+          : min,
+      nonNullStudents[0].course_total_percentage
+    );
+  }, [nonNullStudents]);
+  const maxPct = React.useMemo(() => {
+    if (nonNullStudents.length === 0) return null;
+    return nonNullStudents.reduce(
+      (max, s) =>
+        s.course_total_percentage != null && s.course_total_percentage > max
+          ? s.course_total_percentage
+          : max,
+      nonNullStudents[0].course_total_percentage
+    );
+  }, [nonNullStudents]);
 
   const bucketsConfig = [
     { id: '0-50', label: '0–50', min: 0, max: 50 },
@@ -1314,21 +1308,27 @@ const CurriculumModule = () => {
     { id: '90-100', label: '90–100', min: 90, max: 101 },
   ];
 
-  const bucketCounts = bucketsConfig.map((bucket) => {
-    const count = nonNullStudents.filter((s) => {
-      const p = s.course_total_percentage;
-      return p != null && p >= bucket.min && p < bucket.max;
-    }).length;
-    return { ...bucket, count };
-  });
+  const bucketCounts = React.useMemo(() => {
+    return bucketsConfig.map((bucket) => {
+      const count = nonNullStudents.filter((s) => {
+        const p = s.course_total_percentage;
+        return p != null && p >= bucket.min && p < bucket.max;
+      }).length;
+      return { ...bucket, count };
+    });
+  }, [nonNullStudents]);
 
-  const maxBucketCount = bucketCounts.reduce((m, b) => (b.count > m ? b.count : m), 0) || 1;
-
-  const globalLeaderboard = [...nonNullStudents].sort(
-    (a, b) => b.course_total_percentage - a.course_total_percentage
+  const maxBucketCount = React.useMemo(
+    () => bucketCounts.reduce((m, b) => (b.count > m ? b.count : m), 0) || 1,
+    [bucketCounts]
   );
-  const top3 = globalLeaderboard.slice(0, 3);
-  const lowest3 = [...globalLeaderboard].slice(-3).reverse();
+
+  const globalLeaderboard = React.useMemo(
+    () => [...nonNullStudents].sort((a, b) => b.course_total_percentage - a.course_total_percentage),
+    [nonNullStudents]
+  );
+  const top3 = React.useMemo(() => globalLeaderboard.slice(0, 3), [globalLeaderboard]);
+  const lowest3 = React.useMemo(() => [...globalLeaderboard].slice(-3).reverse(), [globalLeaderboard]);
 
   return (
     <div className="space-y-6">
@@ -1354,7 +1354,7 @@ const CurriculumModule = () => {
             {loadingCats && <span className="text-xs text-gray-400">Loading…</span>}
           </div>
           {catError ? (
-            <p className="text-sm text-red-600">{catError}</p>
+            <InlineStateMessage type="error">{catError}</InlineStateMessage>
           ) : (
             <select
               value={selectedCategoryId}
@@ -1377,11 +1377,11 @@ const CurriculumModule = () => {
             {loadingCourses && <span className="text-xs text-gray-400">Loading…</span>}
           </div>
           {!selectedCategoryId ? (
-            <p className="text-sm text-gray-500">Pick a Grade/Level first.</p>
+            <InlineStateMessage>Pick a Grade/Level first.</InlineStateMessage>
           ) : courseError ? (
-            <p className="text-sm text-red-600">{courseError}</p>
+            <InlineStateMessage type="error">{courseError}</InlineStateMessage>
           ) : moodleCourses.length === 0 ? (
-            <p className="text-sm text-gray-500">No courses found in this category.</p>
+            <InlineStateMessage>No courses found in this category.</InlineStateMessage>
           ) : (
             <div className="space-y-2 max-h-[55vh] overflow-y-auto pr-1">
               {moodleCourses.map((c) => (
@@ -1463,11 +1463,11 @@ const CurriculumModule = () => {
             </div>
           </div>
           {!selectedCourse ? (
-            <p className="text-sm text-gray-500">Select a course to see enrolled students.</p>
+            <InlineStateMessage>Select a course to see enrolled students.</InlineStateMessage>
           ) : studentError ? (
-            <p className="text-sm text-red-600">{studentError}</p>
+            <InlineStateMessage type="error">{studentError}</InlineStateMessage>
           ) : courseStudents.length === 0 ? (
-            <p className="text-sm text-gray-500">No enrolled students found for this course (according to DNEC EthioEducation LMS).</p>
+            <InlineStateMessage>No enrolled students found for this course (according to DNEC EthioEducation LMS).</InlineStateMessage>
           ) : (
             <div className="space-y-3">
               <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-gray-400 border-b pb-2">
@@ -1818,11 +1818,11 @@ const CurriculumModule = () => {
             </div>
             <div className="p-4 max-h-[60vh] overflow-y-auto">
               {detailLoading ? (
-                <p className="text-gray-500 text-sm">Loading detailed grades…</p>
+                <InlineStateMessage>Loading detailed grades...</InlineStateMessage>
               ) : detailError ? (
-                <p className="text-red-600 text-sm">{detailError}</p>
+                <InlineStateMessage type="error">{detailError}</InlineStateMessage>
               ) : detailItems.length === 0 ? (
-                <p className="text-gray-500 text-sm">No detailed items found for this course.</p>
+                <InlineStateMessage>No detailed items found for this course.</InlineStateMessage>
               ) : (
                 <div className="text-xs md:text-sm">
                   <div className="grid grid-cols-3 md:grid-cols-7 gap-2 px-2 py-2 border-b text-[10px] md:text-xs font-semibold text-gray-500 uppercase tracking-wide">
@@ -1834,9 +1834,9 @@ const CurriculumModule = () => {
                     <div className="hidden md:block text-right">Contribution</div>
                   </div>
                   <ul className="divide-y">
-                    {detailItems.map((item, idx) => (
+                    {detailItems.map((item) => (
                       <li
-                        key={idx}
+                        key={`${item.item_name || ''}-${item.weight || ''}-${item.range || ''}-${item.grade_text || ''}`}
                         className="py-2 px-2 grid grid-cols-3 md:grid-cols-7 gap-2 items-center"
                       >
                         <div className="col-span-2 md:col-span-2 font-medium text-gray-800">
@@ -2242,12 +2242,10 @@ const StudentDashboard = ({ moodleUserId, studentName }) => {
           performance snapshot from DNEC EthioEducation LMS.
         </p>
         <p className="text-indigo-200 text-sm mt-1">Keep going - your progress is updated from your LMS grades.</p>
+        {loading && <p className="text-indigo-200 text-xs mt-2">Refreshing latest grades...</p>}
       </div>
       {error && <p className="text-red-600 bg-red-50 p-3 rounded-xl border border-red-100 text-sm">{error}</p>}
-      {loading ? (
-        <p className="text-gray-500 text-sm">Loading your data…</p>
-      ) : (
-        <>
+      <>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
             <p className="text-xs uppercase tracking-wider text-gray-500 font-semibold">My courses</p>
@@ -2310,8 +2308,295 @@ const StudentDashboard = ({ moodleUserId, studentName }) => {
             )}
           </div>
         </div>
-        </>
-      )}
+      </>
+    </div>
+  );
+};
+
+const StudentCurriculumExplorer = ({ moodleUserId, studentName }) => {
+  const [loadingInit, setLoadingInit] = useState(false);
+  const [error, setError] = useState(null);
+  const [categories, setCategories] = useState([]);
+  const [grades, setGrades] = useState([]);
+  const [selectedCategoryId, setSelectedCategoryId] = useState('');
+  const [courses, setCourses] = useState([]);
+  const [loadingCourses, setLoadingCourses] = useState(false);
+  const [selectedCourse, setSelectedCourse] = useState(null);
+  const [detailItems, setDetailItems] = useState([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState(null);
+
+  const enrolledCourseIds = React.useMemo(() => {
+    const ids = new Set();
+    for (const g of grades) {
+      if (g?.course_id != null) ids.add(Number(g.course_id));
+    }
+    return ids;
+  }, [grades]);
+
+  React.useEffect(() => {
+    if (!moodleUserId) return;
+    let cancelled = false;
+    setLoadingInit(true);
+    setError(null);
+    // Load categories first so the Grade/Level selector renders quickly.
+    apiFetch('/api/moodle/categories')
+      .then((res) => (res.ok ? res.json() : Promise.reject(res)))
+      .then((categoriesData) => {
+        if (cancelled) return;
+        const nextCategories = Array.isArray(categoriesData?.categories) ? categoriesData.categories : [];
+        setCategories(nextCategories.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))));
+      })
+      .catch((res) => {
+        if (cancelled) return;
+        setError(friendlyStatusMessage(res?.status, 'Could not load grade categories right now.'));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingInit(false);
+      });
+
+    // Fetch grades in the background; this should not block category rendering.
+    apiFetch(`/api/moodle/site-students/${moodleUserId}/grades`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(res)))
+      .then((gradesData) => {
+        if (cancelled) return;
+        const nextGrades = Array.isArray(gradesData?.grades) ? gradesData.grades : [];
+        setGrades(nextGrades);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Keep the selector usable even if grades are temporarily unavailable.
+        setError((prev) => prev || 'Could not load your grades right now. You can still browse categories.');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [moodleUserId]);
+
+  React.useEffect(() => {
+    if (!selectedCategoryId) {
+      setCourses([]);
+      setSelectedCourse(null);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingCourses(true);
+    setSelectedCourse(null);
+    setDetailItems([]);
+    setDetailError(null);
+
+    apiFetch(`/api/moodle/courses/${selectedCategoryId}`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(res)))
+      .then((data) => {
+        if (cancelled) return;
+        const list = Array.isArray(data?.courses) ? data.courses : [];
+        const filtered = list.filter((c) => enrolledCourseIds.has(Number(c.id)));
+        setCourses(filtered);
+      })
+      .catch((res) => {
+        if (cancelled) return;
+        setError(friendlyStatusMessage(res?.status, 'Could not load courses for this category.'));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingCourses(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCategoryId, enrolledCourseIds]);
+
+  const selectedCourseGrade = React.useMemo(() => {
+    if (!selectedCourse?.id) return null;
+    return grades.find((g) => Number(g.course_id) === Number(selectedCourse.id)) || null;
+  }, [grades, selectedCourse]);
+
+  const openCourseDetails = (course) => {
+    if (!moodleUserId || !course?.id) return;
+    setSelectedCourse(course);
+    setDetailItems([]);
+    setDetailError(null);
+    setDetailLoading(true);
+
+    apiFetch(`/api/moodle/course-grades-direct/${moodleUserId}/${course.id}`)
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (ok) {
+          setDetailItems(Array.isArray(data?.items) ? data.items : []);
+        } else {
+          setDetailError(data?.message || 'Could not load detailed grades for this course.');
+        }
+      })
+      .catch(() => setDetailError('Request failed. Please try again.'))
+      .finally(() => setDetailLoading(false));
+  };
+
+  const visibleDetailItems = React.useMemo(() => {
+    const selectedName = String(selectedCourse?.fullname || selectedCourse?.shortname || '').trim().toLowerCase();
+    return detailItems.filter((item) => {
+      const itemName = String(item?.item_name || '').trim();
+      const itemNameLower = itemName.toLowerCase();
+      // Hide only total/summary rows; keep regular items even when grade is empty.
+      if (itemNameLower === 'course total') return false;
+      if (selectedName && itemNameLower === selectedName) return false;
+      return true;
+    });
+  }, [detailItems, selectedCourse]);
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-indigo-900 border border-indigo-100 p-8 rounded-3xl text-white shadow-xl shadow-indigo-100">
+        <h3 className="text-xl font-black uppercase tracking-tight">Grades Explorer</h3>
+        <p className="text-indigo-200 text-sm mt-1">
+          {studentName ? `${studentName}, ` : ''}select a grade level, then a course, then view your detailed grades.
+        </p>
+      </div>
+
+      {error && <p className="text-red-600 bg-red-50 p-3 rounded-xl border border-red-100 text-sm">{error}</p>}
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+          <h4 className="font-bold text-gray-800 mb-3">1) Select Grade/Level</h4>
+          {loadingInit ? (
+            <p className="text-sm text-gray-500">Loading categories…</p>
+          ) : (
+            <select
+              value={selectedCategoryId}
+              onChange={(e) => setSelectedCategoryId(e.target.value)}
+              className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"
+            >
+              <option value="">— Select —</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+          <h4 className="font-bold text-gray-800 mb-3">2) Select Course</h4>
+          {!selectedCategoryId ? (
+            <p className="text-sm text-gray-500">Pick a grade level first.</p>
+          ) : loadingCourses ? (
+            <p className="text-sm text-gray-500">Loading your courses…</p>
+          ) : courses.length === 0 ? (
+            <p className="text-sm text-gray-500">No enrolled courses found under this grade level.</p>
+          ) : (
+            <div className="space-y-2 max-h-[52vh] overflow-y-auto pr-1">
+              {courses.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => openCourseDetails(c)}
+                  className={`w-full text-left px-4 py-3 rounded-xl border transition-all ${
+                    Number(selectedCourse?.id) === Number(c.id)
+                      ? 'border-indigo-300 bg-indigo-50'
+                      : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  <div className="text-sm font-bold text-gray-900">{c.fullname || c.shortname || `Course ${c.id}`}</div>
+                  <div className="text-xs text-gray-500">Course ID: {c.id}</div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+          <h4 className="font-bold text-gray-800 mb-3">3) Course Grades</h4>
+          {!selectedCourse ? (
+            <p className="text-sm text-gray-500">Select a course to view your grades.</p>
+          ) : (
+            <div className="space-y-3">
+              <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3">
+                <p className="text-xs text-indigo-600 font-bold uppercase tracking-wider">Selected Course</p>
+                <p className="text-sm font-bold text-indigo-900 mt-1">
+                  {selectedCourse.fullname || selectedCourse.shortname || `Course ${selectedCourse.id}`}
+                </p>
+                <p className="text-xs text-indigo-700 mt-1">
+                  Final grade:{' '}
+                  <span className="font-semibold">
+                    {selectedCourseGrade?.grade ?? '—'}
+                    {selectedCourseGrade?.course_total_percentage != null
+                      ? ` (${selectedCourseGrade.course_total_percentage}%)`
+                      : ''}
+                  </span>
+                </p>
+              </div>
+
+              {visibleDetailItems.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const courseLabel = (
+                      selectedCourse?.fullname ||
+                      selectedCourse?.shortname ||
+                      `course-${selectedCourse?.id || 'unknown'}`
+                    )
+                      .replace(/[^\w\s-]/g, '')
+                      .trim()
+                      .replace(/\s+/g, '-')
+                      .toLowerCase();
+                    const studentLabel = (studentName || 'student')
+                      .replace(/[^\w\s-]/g, '')
+                      .trim()
+                      .replace(/\s+/g, '-')
+                      .toLowerCase();
+                    const date = new Date().toISOString().slice(0, 10);
+                    const rows = visibleDetailItems.map((item) => ({
+                      'Item Name': item.item_name || '',
+                      Grade: item.grade_text || '',
+                      Percentage: item.percentage || '',
+                      Weight: item.weight || '',
+                      Range: item.range || '',
+                    }));
+                    downloadCsv(`${studentLabel}-grades-detail-${courseLabel}-${date}.csv`, rows);
+                  }}
+                  className="inline-flex items-center gap-2 px-3 py-2 text-xs font-semibold text-indigo-700 border border-indigo-200 rounded-lg hover:bg-indigo-50"
+                >
+                  <Download size={14} />
+                  Export CSV
+                </button>
+              )}
+
+              {detailError && <InlineStateMessage type="error">{detailError}</InlineStateMessage>}
+              {detailLoading ? (
+                <InlineStateMessage>Loading detailed grade items...</InlineStateMessage>
+              ) : visibleDetailItems.length === 0 ? (
+                <InlineStateMessage>No detailed grade items available for this course.</InlineStateMessage>
+              ) : (
+                <div className="space-y-2 max-h-[45vh] overflow-y-auto pr-1">
+                  {visibleDetailItems.map((item) => (
+                    <div
+                      key={`${item.item_name || ''}-${item.weight || ''}-${item.range || ''}-${item.grade_text || ''}`}
+                      className="border border-gray-100 rounded-xl p-3 bg-gray-50/70"
+                    >
+                      <p className="text-sm font-semibold text-gray-900">{item.item_name}</p>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <span className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">Grade</span>
+                        <span className="inline-flex items-center rounded-md bg-indigo-100 px-2 py-1 text-sm font-extrabold text-indigo-800">
+                          {item.grade_text || '—'}
+                        </span>
+                        {item.percentage && (
+                          <>
+                            <span className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">Percentage</span>
+                            <span className="inline-flex items-center rounded-md bg-emerald-100 px-2 py-1 text-sm font-extrabold text-emerald-800">
+                              {item.percentage}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 };
@@ -2459,7 +2744,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
           <h3 className="text-xl font-black uppercase tracking-tight text-white">DNEC EthioEducation LMS Sync Hub</h3>
           <p className="text-indigo-200 text-sm mt-1 max-w-md">
             {isStudentScoped
-              ? 'View your own report card from DNEC EthioEducation LMS.'
+              ? 'Quick sync view for your account. Use Grades Explorer for structured level -> course -> grade navigation.'
               : 'Fetch grades from DNEC EthioEducation LMS for a student. Select a student, then click "Fetch grades from DNEC EthioEducation LMS".'}
           </p>
         </div>
@@ -2469,7 +2754,9 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
           <h4 className="font-bold mb-4 text-gray-800">Students &amp; Fetch</h4>
           {error && (
-            <p className="text-red-600 bg-red-50 p-2.5 rounded-xl border border-red-100 text-sm mb-4">{error}</p>
+            <div className="mb-4">
+              <InlineStateMessage type="error">{error}</InlineStateMessage>
+            </div>
           )}
           {message && (
             <p className="text-green-600 bg-green-50 p-2.5 rounded-xl border border-green-100 text-sm mb-4 flex items-center">
@@ -2478,7 +2765,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
             </p>
           )}
           {loading && students.length === 0 ? (
-            <p className="text-gray-500 text-sm">Loading students…</p>
+            <InlineStateMessage>Loading students...</InlineStateMessage>
           ) : (
             <div className="space-y-3">
               {!isStudentScoped && (
@@ -2743,11 +3030,11 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
             </div>
             <div className="p-4 max-h-[60vh] overflow-y-auto">
               {detailLoading ? (
-                <p className="text-gray-500 text-sm">Loading detailed grades…</p>
+                <InlineStateMessage>Loading detailed grades...</InlineStateMessage>
               ) : detailError ? (
-                <p className="text-red-600 text-sm">{detailError}</p>
+                <InlineStateMessage type="error">{detailError}</InlineStateMessage>
               ) : detailItems.length === 0 ? (
-                <p className="text-gray-500 text-sm">No detailed items found for this course.</p>
+                <InlineStateMessage>No detailed items found for this course.</InlineStateMessage>
               ) : (
                 <div className="text-xs md:text-sm">
                   <div className="grid grid-cols-3 md:grid-cols-7 gap-2 px-2 py-2 border-b text-[10px] md:text-xs font-semibold text-gray-500 uppercase tracking-wide">
@@ -2759,9 +3046,9 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
                     <div className="hidden md:block text-right">Contribution</div>
                   </div>
                   <ul className="divide-y">
-                    {detailItems.map((item, idx) => (
+                    {detailItems.map((item) => (
                       <li
-                        key={idx}
+                        key={`${item.item_name || ''}-${item.weight || ''}-${item.range || ''}-${item.grade_text || ''}`}
                         className="py-2 px-2 grid grid-cols-3 md:grid-cols-7 gap-2 items-center"
                       >
                         <div className="col-span-2 md:col-span-2 font-medium text-gray-800">
