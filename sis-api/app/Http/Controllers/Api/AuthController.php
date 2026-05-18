@@ -113,25 +113,22 @@ class AuthController extends Controller
             ->first();
         $existingRoles = $existingUser?->roleList() ?? [];
 
-        $roles = ['student'];
-        if (
-            in_array(strtolower($username), $adminUsernamesLc, true) ||
+        $isAdmin = in_array(strtolower($username), $adminUsernamesLc, true) ||
             ($email !== '' && in_array(strtolower($email), $adminEmailsLc, true)) ||
             count(array_intersect($adminMoodleRoleShortnames, is_array($moodleRoleShortnames) ? $moodleRoleShortnames : [])) > 0 ||
-            in_array('admin', $existingRoles, true)
-        ) {
-            $roles[] = 'admin';
-        }
+            in_array('admin', $existingRoles, true);
 
         // Create or update a local SIS user record. Password is random; Moodle is source of truth for auth.
         $allowedRoles = ['admin', 'student'];
+        $merged = array_merge($existingRoles, $isAdmin ? ['admin', 'student'] : ['student']);
         $finalRoles = array_values(array_unique(array_filter(
-            array_merge($existingRoles, $roles),
+            $merged,
             fn ($role) => in_array((string) $role, $allowedRoles, true)
         )));
         if (count($finalRoles) === 0) {
             $finalRoles = ['student'];
         }
+        usort($finalRoles, fn ($a, $b) => ($a === 'admin' ? 0 : 1) <=> ($b === 'admin' ? 0 : 1));
 
         $user = User::updateOrCreate(
             ['email' => $email !== '' ? $email : ($username.'@lms.local')],
@@ -145,9 +142,12 @@ class AuthController extends Controller
 
         $token = ApiToken::createTokenFor($user, $tenant);
 
+        $tenantLabel = (string) (SisTenant::config($tenant)['label'] ?? $tenant);
+
         return response()->json([
             'token' => $token,
             'tenant' => $tenant,
+            'tenant_label' => $tenantLabel,
             'user' => [
                 'id' => $user->id,
                 'name' => $user->name,
@@ -192,8 +192,14 @@ class AuthController extends Controller
             $tenant = $apiToken?->tenant;
         }
 
+        $tenantId = $tenant !== null ? (string) $tenant : SisTenant::defaultId();
+        $tenantLabel = SisTenant::exists($tenantId)
+            ? (string) (SisTenant::config($tenantId)['label'] ?? $tenantId)
+            : $tenantId;
+
         return response()->json([
             'tenant' => $tenant,
+            'tenant_label' => $tenantLabel,
             'user' => [
                 'id' => $user->id,
                 'name' => $user->name,

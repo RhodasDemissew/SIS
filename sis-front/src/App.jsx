@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useContext } from 'react';
 import { Routes, Route, Navigate, useLocation, NavLink } from 'react-router-dom';
 import { 
   Users, 
@@ -101,6 +101,25 @@ const SIS_ACTIVE_ROLE_KEY = 'sis_active_role';
 const SIS_LAST_ACTIVITY_KEY = 'sis_last_activity_at';
 const SIS_IDLE_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 hours
 const SIS_ALLOWED_ROLES = ['admin', 'student'];
+const LMS_NAME_FALLBACK = {
+  ecamel: 'DNEC ECAMEL LMS',
+  etss: 'DNEC ETSS LMS',
+};
+
+function resolveLmsName(tenantId, tenantLabel) {
+  if (tenantLabel && String(tenantLabel).trim()) {
+    return String(tenantLabel).trim();
+  }
+  const id = String(tenantId || 'ecamel').toLowerCase();
+  return LMS_NAME_FALLBACK[id] || 'LMS';
+}
+
+const LmsNameContext = React.createContext(resolveLmsName('ecamel', null));
+
+function useLmsName() {
+  return useContext(LmsNameContext);
+}
+
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
 
 function buildApiUrl(path) {
@@ -291,6 +310,12 @@ const App = () => {
     if (typeof window === 'undefined') return 'admin';
     return window.localStorage.getItem(SIS_ACTIVE_ROLE_KEY) || 'admin';
   });
+  const [lmsName, setLmsName] = useState(() =>
+    resolveLmsName(
+      typeof window !== 'undefined' ? window.localStorage.getItem(SIS_TENANT_KEY) : 'ecamel',
+      null
+    )
+  );
   const pathname = (location.pathname || '/').replace(/^\//, '') || 'dashboard';
   const activeTab = pathname;
   const [students, setStudents] = useState(INITIAL_STUDENTS);
@@ -342,11 +367,14 @@ const App = () => {
         if (data.tenant && typeof window !== 'undefined') {
           window.localStorage.setItem(SIS_TENANT_KEY, data.tenant);
         }
+        setLmsName(resolveLmsName(data.tenant, data.tenant_label));
         const rolesRaw = Array.isArray(user?.roles) && user.roles.length ? user.roles : ['admin'];
         const roles = rolesRaw.filter((role) => SIS_ALLOWED_ROLES.includes(role));
         if (!roles.length) roles.push('student');
+        const storedRole =
+          typeof window !== 'undefined' ? window.localStorage.getItem(SIS_ACTIVE_ROLE_KEY) : null;
         const preferred =
-          (typeof window !== 'undefined' && window.localStorage.getItem(SIS_ACTIVE_ROLE_KEY)) || roles[0];
+          storedRole || (roles.includes('admin') ? 'admin' : roles[0]);
         const nextRole = roles.includes(preferred) ? preferred : roles[0];
         setUserRole(nextRole);
         if (typeof window !== 'undefined') {
@@ -409,18 +437,21 @@ const App = () => {
     };
   }, [isLoggedIn, handleLogout]);
 
-  const menuItems = {
-    student: [
-      { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-      { id: 'curriculum', label: 'Grades Explorer', icon: GraduationCap },
-      { id: 'moodle', label: 'DNEC ETSS LMS Sync', icon: LinkIcon },
-    ],
-    admin: [
-      { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-      { id: 'curriculum', label: 'Grades Explorer', icon: BookOpen },
-      { id: 'moodle', label: 'DNEC ETSS LMS Sync', icon: LinkIcon },
-    ]
-  };
+  const menuItems = useMemo(
+    () => ({
+      student: [
+        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+        { id: 'curriculum', label: 'Grades Explorer', icon: GraduationCap },
+        { id: 'moodle', label: `${lmsName} Sync`, icon: LinkIcon },
+      ],
+      admin: [
+        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+        { id: 'curriculum', label: 'Grades Explorer', icon: BookOpen },
+        { id: 'moodle', label: `${lmsName} Sync`, icon: LinkIcon },
+      ],
+    }),
+    [lmsName]
+  );
   const activeMenuLabel =
     menuItems[userRole]?.find((item) => item.id === activeTab)?.label ||
     activeTab.replace('-', ' ');
@@ -492,6 +523,7 @@ const App = () => {
   }
 
   return (
+    <LmsNameContext.Provider value={lmsName}>
     <div className="min-h-screen bg-gray-50 flex text-slate-900 font-sans">
       {/* Sidebar */}
       <div className="w-64 bg-indigo-950 text-white flex flex-col shrink-0">
@@ -595,12 +627,14 @@ const App = () => {
       </div>
 
     </div>
+    </LmsNameContext.Provider>
   );
 };
 
 // --- SUB-COMPONENTS ---
 
 const Dashboard = ({ role }) => {
+  const lmsName = useLmsName();
   const [loading, setLoading] = useState(role === 'admin');
   const [error, setError] = useState(null);
   const [gradeLevels, setGradeLevels] = useState(null);
@@ -660,7 +694,7 @@ const Dashboard = ({ role }) => {
           if (cancelled) return;
           setMoodleOk(false);
           setError(
-            'Could not load live stats from DNEC ETSS LMS. Connection may be down.'
+            `Could not load live stats from ${lmsName}. Connection may be down.`
           );
         })
         .finally(() => {
@@ -770,7 +804,7 @@ const Dashboard = ({ role }) => {
                 if (!cancelled) {
                   setMoodleOk(false);
                   setError(
-                    'Could not refresh stats from DNEC ETSS LMS. Connection may be down.'
+                    `Could not refresh stats from ${lmsName}. Connection may be down.`
                   );
                 }
               } finally {
@@ -793,7 +827,7 @@ const Dashboard = ({ role }) => {
               <GraduationCap className="text-indigo-600" size={24} />
             </div>
           </div>
-          <h3 className="text-gray-500 text-sm font-medium">Total grade levels (DNEC ETSS LMS)</h3>
+          <h3 className="text-gray-500 text-sm font-medium">Total grade levels ({lmsName})</h3>
           <p className="text-2xl font-bold text-gray-900 mt-1">
             {gradeLevels !== null ? gradeLevels : '—'}
           </p>
@@ -805,7 +839,7 @@ const Dashboard = ({ role }) => {
               <BookOpen className="text-blue-600" size={24} />
             </div>
           </div>
-          <h3 className="text-gray-500 text-sm font-medium">Total courses (from DNEC ETSS LMS)</h3>
+          <h3 className="text-gray-500 text-sm font-medium">Total courses (from {lmsName})</h3>
           <p className="text-2xl font-bold text-gray-900 mt-1">
             {totalCourses !== null ? totalCourses : '—'}
           </p>
@@ -818,7 +852,7 @@ const Dashboard = ({ role }) => {
               <Users className="text-emerald-600" size={24} />
             </div>
           </div>
-          <h3 className="text-gray-500 text-sm font-medium">Students in DNEC ETSS LMS</h3>
+          <h3 className="text-gray-500 text-sm font-medium">Students in {lmsName}</h3>
           <p className="text-2xl font-bold text-gray-900 mt-1">
             {totalMoodleStudents !== null ? totalMoodleStudents : '—'}
           </p>
@@ -833,7 +867,7 @@ const Dashboard = ({ role }) => {
               <FileText className="text-amber-600" size={24} />
             </div>
           </div>
-          <h3 className="text-gray-500 text-sm font-medium">Last grade fetch (DNEC ETSS LMS)</h3>
+          <h3 className="text-gray-500 text-sm font-medium">Last grade fetch ({lmsName})</h3>
           <p className="text-sm font-semibold text-gray-900 mt-1">
             {formattedLastFetch || 'No grade fetch recorded yet'}
           </p>
@@ -851,14 +885,14 @@ const Dashboard = ({ role }) => {
                 moodleOk === null ? 'bg-gray-300' : moodleOk ? 'bg-green-500' : 'bg-red-500'
               }`}
             />
-            <h3 className="text-sm font-semibold text-gray-900">Connection to DNEC ETSS LMS</h3>
+            <h3 className="text-sm font-semibold text-gray-900">Connection to {lmsName}</h3>
           </div>
         </div>
         <p className="text-sm text-gray-600">
           {moodleOk === null && 'Checking…'}
-          {moodleOk === true && 'OK – DNEC ETSS LMS categories endpoint is responding.'}
+          {moodleOk === true && `OK – ${lmsName} categories endpoint is responding.`}
           {moodleOk === false &&
-            'Error – SIS could not reach DNEC ETSS LMS via the categories API. Check token, URL, or network.'}
+            `Error – SIS could not reach ${lmsName} via the categories API. Check token, URL, or network.`}
         </p>
       </div>
 
@@ -1025,6 +1059,7 @@ const AdmissionsModule = ({ students, loading, onOpenModal, onViewRecord, onDele
 };
 
 const StudentProfileModal = ({ student, onClose }) => {
+  const lmsName = useLmsName();
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-indigo-950/40 backdrop-blur-sm p-4">
       <div className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
@@ -1106,7 +1141,7 @@ const StudentProfileModal = ({ student, onClose }) => {
             <div className="bg-indigo-50 rounded-2xl p-4 flex items-start space-x-3 border border-indigo-100/50">
               <Info size={18} className="text-indigo-600 mt-0.5 shrink-0" />
               <p className="text-[11px] text-indigo-700/70 leading-relaxed font-medium">
-                This student is synchronized with the <strong>DNEC ETSS LMS</strong> via API. Changes to level or status are reflected in the learning portal immediately.
+                This student is synchronized with the <strong>{lmsName}</strong> via API. Changes to level or status are reflected in the learning portal immediately.
               </p>
             </div>
           </div>
@@ -1131,6 +1166,7 @@ const StudentProfileModal = ({ student, onClose }) => {
 };
 
 const CurriculumModule = () => {
+  const lmsName = useLmsName();
   const [loadingCats, setLoadingCats] = useState(false);
   const [catError, setCatError] = useState(null);
   const [categories, setCategories] = useState([]);
@@ -1387,7 +1423,7 @@ const CurriculumModule = () => {
       <div className="flex justify-between items-center">
         <div>
           <h3 className="text-xl font-bold text-gray-900">Grades Explorer</h3>
-          <p className="text-sm text-gray-500">Grade level → Course → Students &amp; DNEC ETSS LMS grades</p>
+          <p className="text-sm text-gray-500">Grade level → Course → Students &amp; {lmsName} grades</p>
         </div>
         <button
           onClick={toggleCompare}
@@ -1519,7 +1555,7 @@ const CurriculumModule = () => {
           ) : studentError ? (
             <InlineStateMessage type="error">{studentError}</InlineStateMessage>
           ) : courseStudents.length === 0 ? (
-            <InlineStateMessage>No enrolled students found for this course (according to DNEC ETSS LMS).</InlineStateMessage>
+            <InlineStateMessage>No enrolled students found for this course (according to {lmsName}).</InlineStateMessage>
           ) : (
             <div className="space-y-3">
               <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-gray-400 border-b pb-2">
@@ -1612,7 +1648,7 @@ const CurriculumModule = () => {
             </div>
           )}
           <p className="mt-3 text-xs text-gray-400">
-            This list is loaded directly from DNEC ETSS LMS enrolments.
+            This list is loaded directly from {lmsName} enrolments.
             {studentsFetchedAt ? ` Last updated: ${new Date(studentsFetchedAt).toLocaleString()}.` : ''}
           </p>
         </div>
@@ -2185,13 +2221,14 @@ const StudentRegistration = ({ courses }) => {
 };
 
 const FacultyRoster = ({ students }) => {
+  const lmsName = useLmsName();
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
       <div className="p-6 border-b flex justify-between items-center bg-gray-50/50">
         <h3 className="text-lg font-bold">Class List: Grade 5 Mathematics</h3>
         <button className="text-indigo-600 flex items-center space-x-1 text-sm font-bold hover:bg-indigo-50 px-3 py-1.5 rounded-lg transition-colors">
           <LinkIcon size={14} />
-          <span>Launch DNEC ETSS LMS Classroom</span>
+          <span>Launch {lmsName} Classroom</span>
         </button>
       </div>
       <table className="w-full text-left">
@@ -2230,6 +2267,7 @@ const FacultyRoster = ({ students }) => {
 };
 
 const StudentDashboard = ({ moodleUserId, studentName }) => {
+  const lmsName = useLmsName();
   const [grades, setGrades] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -2291,7 +2329,7 @@ const StudentDashboard = ({ moodleUserId, studentName }) => {
         <h3 className="text-xl font-black uppercase tracking-tight">My Dashboard</h3>
         <p className="text-indigo-100 text-base mt-2">
           Hi, <span className="font-bold">{studentName || 'Student'}</span>. Here is your personal
-          performance snapshot from DNEC ETSS LMS.
+          performance snapshot from {lmsName}.
         </p>
         <p className="text-indigo-200 text-sm mt-1">Keep going - your progress is updated from your LMS grades.</p>
         {loading && <p className="text-indigo-200 text-xs mt-2">Refreshing latest grades...</p>}
@@ -2654,6 +2692,7 @@ const StudentCurriculumExplorer = ({ moodleUserId, studentName }) => {
 };
 
 const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
+  const lmsName = useLmsName();
   const isStudentScoped = !!lockedMoodleUserId;
   const [students, setStudents] = useState([]);
   const [selectedStudentId, setSelectedStudentId] = useState(lockedMoodleUserId ? String(lockedMoodleUserId) : '');
@@ -2667,6 +2706,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [studentSearch, setStudentSearch] = useState('');
 
   useEffect(() => {
     if (isStudentScoped) {
@@ -2697,7 +2737,17 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
     return () => { cancelled = true; };
   }, [isStudentScoped, lockedMoodleUserId]);
 
-  // Clear grades when switching student; only show grades after "Fetch grades from DNEC ETSS LMS" is used.
+  const filteredStudents = React.useMemo(() => {
+    const q = studentSearch.trim().toLowerCase();
+    if (!q) return students;
+    return students.filter((s) => {
+      const fullname = String(s.fullname || '').toLowerCase();
+      const username = String(s.username || '').toLowerCase();
+      const email = String(s.email || '').toLowerCase();
+      return fullname.includes(q) || username.includes(q) || email.includes(q);
+    });
+  }, [students, studentSearch]);
+
   useEffect(() => {
     setGrades([]);
     setMessage(null);
@@ -2712,7 +2762,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
       .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
       .then(({ ok, data }) => {
         if (ok) {
-          setMessage(data.message || 'Grades fetched from DNEC ETSS LMS.');
+          setMessage(data.message || `Grades fetched from ${lmsName}.`);
           setGrades(data.grades || []);
           if (typeof window !== 'undefined') {
             try {
@@ -2722,7 +2772,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
             }
           }
         } else {
-          setError(data.message || 'Failed to fetch grades from DNEC ETSS LMS.');
+          setError(data.message || `Failed to fetch grades from ${lmsName}.`);
         }
       })
       .catch(() => setError('Request failed. Please try again.'))
@@ -2777,14 +2827,15 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
     })
     .filter(Boolean);
 
-  const sortedByPct = [...gradeCoursesWithPct].sort((a, b) => b.percentage - a.percentage);
-  const topCourses = sortedByPct.slice(0, 3);
-  const bottomCourses = [...sortedByPct]
-    .reverse()
-    .filter(
-      (c) => !topCourses.some((t) => (t.course_id || t.course_name) === (c.course_id || c.course_name))
-    )
-    .slice(0, 3);
+  const excellingCourses = gradeCoursesWithPct
+    .filter((c) => c.percentage >= 70)
+    .sort((a, b) => b.percentage - a.percentage);
+  const progressingCourses = gradeCoursesWithPct
+    .filter((c) => c.percentage >= 50 && c.percentage < 70)
+    .sort((a, b) => b.percentage - a.percentage);
+  const needsAttentionCourses = gradeCoursesWithPct
+    .filter((c) => c.percentage < 50)
+    .sort((a, b) => a.percentage - b.percentage);
 
   return (
     <div className="space-y-6">
@@ -2793,11 +2844,11 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
           <LinkIcon size={32} className="text-indigo-300" />
         </div>
         <div>
-          <h3 className="text-xl font-black uppercase tracking-tight text-white">DNEC ETSS LMS Sync Hub</h3>
+          <h3 className="text-xl font-black uppercase tracking-tight text-white">{lmsName} Sync Hub</h3>
           <p className="text-indigo-200 text-sm mt-1 max-w-md">
             {isStudentScoped
               ? 'Quick sync view for your account. Use Grades Explorer for structured level -> course -> grade navigation.'
-              : 'Fetch grades from DNEC ETSS LMS for a student. Select a student, then click "Fetch grades from DNEC ETSS LMS".'}
+              : `Fetch grades from ${lmsName} for a student. Search and select a student, then click "Fetch grades from ${lmsName}".`}
           </p>
         </div>
       </div>
@@ -2823,6 +2874,17 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
               {!isStudentScoped && (
                 <>
                   <label className="block text-sm font-medium text-gray-700">Select LMS user</label>
+                  <input
+                    type="search"
+                    value={studentSearch}
+                    onChange={(e) => {
+                      setStudentSearch(e.target.value);
+                      setPickerOpen(true);
+                    }}
+                    onFocus={() => setPickerOpen(true)}
+                    placeholder="Search by name, username, or email"
+                    className="w-full mb-2 px-4 py-2 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                  />
                   <div className="relative">
                 <button
                   type="button"
@@ -2844,13 +2906,14 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
                 </button>
                 {pickerOpen && (
                   <div className="absolute left-0 right-0 mt-1 max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-20">
-                    {students.map((s) => (
+                    {filteredStudents.map((s) => (
                       <button
                         type="button"
                         key={s.id}
                         onClick={() => {
                           setSelectedStudentId(String(s.id));
                           setPickerOpen(false);
+                          setStudentSearch('');
                         }}
                         className={`w-full text-left px-4 py-2 text-sm hover:bg-indigo-50 ${
                           String(s.id) === String(selectedStudentId)
@@ -2864,8 +2927,10 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
                         </div>
                       </button>
                     ))}
-                    {students.length === 0 && (
-                      <div className="px-4 py-2 text-xs text-gray-500">No LMS users found.</div>
+                    {filteredStudents.length === 0 && (
+                      <div className="px-4 py-2 text-xs text-gray-500">
+                        {students.length === 0 ? 'No LMS users found.' : 'No students match your search.'}
+                      </div>
                     )}
                   </div>
                 )}
@@ -2877,7 +2942,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
                 disabled={!selectedStudentId || fetching}
                 className="w-full px-4 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
               >
-                {fetching ? 'Fetching…' : isStudentScoped ? 'Load my grades' : 'Fetch grades from DNEC ETSS LMS'}
+                {fetching ? 'Fetching…' : isStudentScoped ? 'Load my grades' : `Fetch grades from ${lmsName}`}
               </button>
             </div>
           )}
@@ -2887,7 +2952,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
           <div className="flex items-center justify-between mb-4">
             <h4 className="font-bold flex items-center text-gray-800">
               <CheckCircle className="text-green-500 mr-2" size={18} />
-              Grades (from DNEC ETSS LMS)
+              Grades (from {lmsName})
             </h4>
             <button
               type="button"
@@ -2912,7 +2977,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
           </div>
           {grades.length === 0 ? (
             <p className="text-gray-500 text-sm">
-              Select a student and click &quot;Fetch grades from DNEC ETSS LMS&quot; to
+              Select a student and click &quot;Fetch grades from {lmsName}&quot; to
               see grades here.
             </p>
           ) : (
@@ -2959,16 +3024,16 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
           <h4 className="text-sm font-semibold text-gray-900 mb-4">
             Course performance overview
           </h4>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div>
               <h5 className="text-xs font-bold text-emerald-600 uppercase tracking-widest mb-2">
                 Excelling in
               </h5>
-              {topCourses.length === 0 ? (
-                <p className="text-xs text-gray-500">No graded courses yet.</p>
+              {excellingCourses.length === 0 ? (
+                <p className="text-xs text-gray-500">No courses at 70% or above.</p>
               ) : (
                 <div className="space-y-2">
-                  {topCourses.map((c) => {
+                  {excellingCourses.map((c) => {
                     const width = Math.max(10, c.percentage);
                     return (
                       <div
@@ -2994,14 +3059,47 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
               )}
             </div>
             <div>
+              <h5 className="text-xs font-bold text-amber-600 uppercase tracking-widest mb-2">
+                Progressing well
+              </h5>
+              {progressingCourses.length === 0 ? (
+                <p className="text-xs text-gray-500">No courses between 50% and 70%.</p>
+              ) : (
+                <div className="space-y-2">
+                  {progressingCourses.map((c) => {
+                    const width = Math.max(10, c.percentage);
+                    return (
+                      <div
+                        key={c.course_id || c.course_name}
+                        className="flex items-center gap-3 text-xs"
+                      >
+                        <div className="w-32 truncate text-gray-700 font-medium">
+                          {c.course_name}
+                        </div>
+                        <div className="flex-1 h-3 rounded-full bg-amber-50 overflow-hidden">
+                          <div
+                            className="h-3 rounded-full bg-amber-500 transition-all duration-500"
+                            style={{ width: `${width}%` }}
+                          />
+                        </div>
+                        <div className="w-10 text-right text-amber-700 font-semibold">
+                          {c.percentage.toFixed(0)}%
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div>
               <h5 className="text-xs font-bold text-rose-600 uppercase tracking-widest mb-2">
                 Needs attention
               </h5>
-              {bottomCourses.length === 0 ? (
-                <p className="text-xs text-gray-500">No graded courses yet.</p>
+              {needsAttentionCourses.length === 0 ? (
+                <p className="text-xs text-gray-500">No courses below 50%.</p>
               ) : (
                 <div className="space-y-2">
-                  {bottomCourses.map((c) => {
+                  {needsAttentionCourses.map((c) => {
                     const width = Math.max(10, c.percentage);
                     return (
                       <div

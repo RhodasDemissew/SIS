@@ -64,7 +64,10 @@ class User extends Authenticatable
         if (! is_array($roles) || empty($roles)) {
             return ['admin'];
         }
-        return array_values(array_unique(array_map(fn ($r) => (string) $r, $roles)));
+        $list = array_values(array_unique(array_map(fn ($r) => (string) $r, $roles)));
+        usort($list, fn ($a, $b) => ($a === 'admin' ? 0 : 1) <=> ($b === 'admin' ? 0 : 1));
+
+        return $list;
     }
 
     public function hasRole(string $role): bool
