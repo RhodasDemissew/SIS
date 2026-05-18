@@ -50,6 +50,126 @@ class MoodleController extends Controller
     }
 
     /**
+     * One cached scan of categories, courses, and enrolments (shared by dashboard + student picker).
+     *
+     * @return array{
+     *   students: array<int, array{id: int, fullname: string, email: string, username: string}>,
+     *   total_categories: int,
+     *   total_courses: int,
+     *   total_students: int,
+     *   students_per_category: array<int, array{category_id: int, category_name: string, student_count: int}>,
+     *   cached_at: string
+     * }|null
+     */
+    private function rememberSiteEnrolmentData(bool $forceRefresh = false): ?array
+    {
+        $cacheKey = $this->moodleCacheKey('site_enrolment_data');
+
+        if ($forceRefresh) {
+            Cache::forget($cacheKey);
+            Cache::forget($this->moodleCacheKey('site_students'));
+            Cache::forget($this->moodleCacheKey('overview_metrics'));
+        }
+
+        return Cache::remember($cacheKey, now()->addMinutes(30), function () {
+            $cats = $this->moodle->getCourseCategories();
+            if ($cats === null) {
+                return null;
+            }
+
+            $categories = [];
+            foreach ($cats as $c) {
+                if (! is_array($c) || ! isset($c['id'])) {
+                    continue;
+                }
+                $categories[] = [
+                    'id' => (int) $c['id'],
+                    'name' => (string) ($c['name'] ?? ''),
+                ];
+            }
+
+            $categoryIds = array_column($categories, 'id');
+            $coursesByCategory = $this->moodle->getCoursesByCategories($categoryIds);
+
+            $totalCourses = 0;
+            $courseToCategory = [];
+            foreach ($categoryIds as $cid) {
+                $courses = $coursesByCategory[$cid] ?? null;
+                if (! is_array($courses)) {
+                    continue;
+                }
+                $totalCourses += count($courses);
+                foreach ($courses as $course) {
+                    if (! isset($course['id'])) {
+                        continue;
+                    }
+                    $courseToCategory[(int) $course['id']] = $cid;
+                }
+            }
+
+            $courseIds = array_keys($courseToCategory);
+            $enrolledByCourse = $this->moodle->getEnrolledUsersForCourses($courseIds);
+
+            $usersById = [];
+            $studentsPerCategory = [];
+            foreach ($courseIds as $courseId) {
+                $cid = $courseToCategory[$courseId] ?? null;
+                if (! $cid) {
+                    continue;
+                }
+                $users = $enrolledByCourse[$courseId] ?? null;
+                if (! is_array($users)) {
+                    continue;
+                }
+                foreach ($users as $u) {
+                    if (! is_array($u) || ! isset($u['id'])) {
+                        continue;
+                    }
+                    $uid = (int) $u['id'];
+                    $studentsPerCategory[$cid][$uid] = true;
+
+                    if (isset($usersById[$uid])) {
+                        continue;
+                    }
+                    $fullname = trim((string) (($u['fullname'] ?? '') ?: (($u['firstname'] ?? '').' '.($u['lastname'] ?? ''))));
+                    $usersById[$uid] = [
+                        'id' => $uid,
+                        'fullname' => $fullname !== '' ? $fullname : ('User '.$uid),
+                        'email' => (string) ($u['email'] ?? ''),
+                        'username' => (string) ($u['username'] ?? ''),
+                    ];
+                }
+            }
+
+            $students = array_values($usersById);
+            usort($students, function (array $a, array $b) {
+                return strcasecmp($a['fullname'] ?? '', $b['fullname'] ?? '');
+            });
+
+            $studentBuckets = [];
+            foreach ($categories as $cat) {
+                $cid = $cat['id'];
+                $studentBuckets[] = [
+                    'category_id' => $cid,
+                    'category_name' => $cat['name'],
+                    'student_count' => isset($studentsPerCategory[$cid])
+                        ? count($studentsPerCategory[$cid])
+                        : 0,
+                ];
+            }
+
+            return [
+                'students' => $students,
+                'total_categories' => count($categories),
+                'total_courses' => $totalCourses,
+                'total_students' => count($usersById),
+                'students_per_category' => $studentBuckets,
+                'cached_at' => now()->toIso8601String(),
+            ];
+        });
+    }
+
+    /**
      * Link a student to Moodle by email (set moodle_user_id).
      */
     public function linkStudent(string $id): JsonResponse
@@ -134,86 +254,16 @@ class MoodleController extends Controller
         }
 
         $forceRefresh = $this->canForceRefresh($request);
-        $cacheKey = $this->moodleCacheKey('site_students');
+        $data = $this->rememberSiteEnrolmentData($forceRefresh);
 
-        if ($forceRefresh) {
-            Cache::forget($cacheKey);
-        }
-
-        $payload = Cache::remember($cacheKey, now()->addMinutes(10), function () {
-            $cats = $this->moodle->getCourseCategories();
-            if ($cats === null) {
-                return null;
-            }
-
-            $categories = [];
-            foreach ($cats as $c) {
-                if (! is_array($c) || ! isset($c['id'])) {
-                    continue;
-                }
-                $categories[] = [
-                    'id' => (int) $c['id'],
-                    'name' => (string) ($c['name'] ?? ''),
-                ];
-            }
-
-            $categoryIds = array_column($categories, 'id');
-            $coursesByCategory = $this->moodle->getCoursesByCategories($categoryIds);
-
-            $courseToCategory = [];
-            foreach ($categoryIds as $cid) {
-                $courses = $coursesByCategory[$cid] ?? null;
-                if (! is_array($courses)) {
-                    continue;
-                }
-                foreach ($courses as $course) {
-                    if (! isset($course['id'])) {
-                        continue;
-                    }
-                    $courseToCategory[(int) $course['id']] = $cid;
-                }
-            }
-
-            $courseIds = array_keys($courseToCategory);
-            $enrolledByCourse = $this->moodle->getEnrolledUsersForCourses($courseIds);
-
-            $usersById = [];
-            foreach ($courseIds as $courseId) {
-                $users = $enrolledByCourse[$courseId] ?? null;
-                if (! is_array($users)) {
-                    continue;
-                }
-                foreach ($users as $u) {
-                    if (! is_array($u) || ! isset($u['id'])) {
-                        continue;
-                    }
-                    $uid = (int) $u['id'];
-                    if (isset($usersById[$uid])) {
-                        continue;
-                    }
-                    $fullname = trim((string) (($u['fullname'] ?? '') ?: (($u['firstname'] ?? '').' '.($u['lastname'] ?? ''))));
-                    $usersById[$uid] = [
-                        'id' => $uid,
-                        'fullname' => $fullname !== '' ? $fullname : ('User '.$uid),
-                        'email' => (string) ($u['email'] ?? ''),
-                        'username' => (string) ($u['username'] ?? ''),
-                    ];
-                }
-            }
-
-            $students = array_values($usersById);
-            usort($students, function (array $a, array $b) {
-                return strcasecmp($a['fullname'] ?? '', $b['fullname'] ?? '');
-            });
-
-            return ['students' => $students];
-        });
-
-        if ($payload === null) {
+        if ($data === null) {
             return response()->json(['message' => 'Could not fetch Moodle site students'], 502);
         }
 
-        return response()->json($payload);
+        return response()->json([
+            'students' => $data['students'],
+            'cached_at' => $data['cached_at'],
+        ]);
     }
 
     /**
@@ -229,98 +279,19 @@ class MoodleController extends Controller
         }
 
         $forceRefresh = $this->canForceRefresh($request);
-        $cacheKey = $this->moodleCacheKey('overview_metrics');
+        $data = $this->rememberSiteEnrolmentData($forceRefresh);
 
-        if ($forceRefresh) {
-            Cache::forget($cacheKey);
-        }
-
-        // Heavier call; keep it cached for a while.
-        // Frontend can force a live refresh with ?refresh=1 when needed.
-        $payload = Cache::remember($cacheKey, now()->addMinutes(10), function () {
-            $cats = $this->moodle->getCourseCategories();
-            if ($cats === null) {
-                return null;
-            }
-
-            $categories = [];
-            foreach ($cats as $c) {
-                if (! is_array($c) || ! isset($c['id'])) {
-                    continue;
-                }
-                $categories[] = [
-                    'id' => (int) $c['id'],
-                    'name' => (string) ($c['name'] ?? ''),
-                ];
-            }
-
-            $categoryIds = array_column($categories, 'id');
-            $coursesByCategory = $this->moodle->getCoursesByCategories($categoryIds);
-
-            $totalCourses = 0;
-            $courseToCategory = [];
-            foreach ($categoryIds as $cid) {
-                $courses = $coursesByCategory[$cid] ?? null;
-                if (is_array($courses)) {
-                    $totalCourses += count($courses);
-                    foreach ($courses as $course) {
-                        if (isset($course['id'])) {
-                            $courseToCategory[(int) $course['id']] = $cid;
-                        }
-                    }
-                }
-            }
-
-            // Fetch enrolled users for all courses in parallel and count unique students per category.
-            $courseIds = array_keys($courseToCategory);
-            $enrolledByCourse = $this->moodle->getEnrolledUsersForCourses($courseIds);
-
-            $studentsPerCategory = [];
-            $globalStudentIds = [];
-            foreach ($courseIds as $courseId) {
-                $cid = $courseToCategory[$courseId] ?? null;
-                if (! $cid) {
-                    continue;
-                }
-                $users = $enrolledByCourse[$courseId] ?? null;
-                if (! is_array($users)) {
-                    continue;
-                }
-                foreach ($users as $u) {
-                    if (! is_array($u) || ! isset($u['id'])) {
-                        continue;
-                    }
-                    $uid = (int) $u['id'];
-                    $studentsPerCategory[$cid][$uid] = true;
-                    $globalStudentIds[$uid] = true;
-                }
-            }
-
-            $studentBuckets = [];
-            foreach ($categories as $cat) {
-                $cid = $cat['id'];
-                $studentBuckets[] = [
-                    'category_id' => $cid,
-                    'category_name' => $cat['name'],
-                    'student_count' => isset($studentsPerCategory[$cid])
-                        ? count($studentsPerCategory[$cid])
-                        : 0,
-                ];
-            }
-
-            return [
-                'total_categories' => count($categories),
-                'total_courses' => $totalCourses,
-                'total_students' => count($globalStudentIds),
-                'students_per_category' => $studentBuckets,
-            ];
-        });
-
-        if ($payload === null) {
+        if ($data === null) {
             return response()->json(['message' => 'Could not fetch Moodle overview metrics'], 502);
         }
 
-        return response()->json($payload);
+        return response()->json([
+            'total_categories' => $data['total_categories'],
+            'total_courses' => $data['total_courses'],
+            'total_students' => $data['total_students'],
+            'students_per_category' => $data['students_per_category'],
+            'cached_at' => $data['cached_at'],
+        ]);
     }
 
     /**

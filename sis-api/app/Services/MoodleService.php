@@ -6,7 +6,10 @@ use Illuminate\Support\Facades\Http;
 
 class MoodleService
 {
-    private const POOL_CHUNK_SIZE = 20;
+    private const POOL_CHUNK_SIZE = 40;
+
+    /** Smaller enrolment payloads (faster over slow links). */
+    private const ENROLLED_USER_FIELDS = 'id,fullname,firstname,lastname,email,username';
 
     protected string $baseUrl;
 
@@ -469,10 +472,22 @@ class MoodleService
      *
      * @return array<int, array<string, mixed>>|null
      */
+    /**
+     * @return array<int, array<string, string>>
+     */
+    private function enrolledUsersOptions(): array
+    {
+        return [
+            ['name' => 'onlyactive', 'value' => '1'],
+            ['name' => 'userfields', 'value' => self::ENROLLED_USER_FIELDS],
+        ];
+    }
+
     public function getEnrolledUsers(int $courseId): ?array
     {
         $result = $this->call('core_enrol_get_enrolled_users', [
             'courseid' => $courseId,
+            'options' => $this->enrolledUsersOptions(),
         ]);
 
         if ($result === null || ! is_array($result)) {
@@ -499,7 +514,9 @@ class MoodleService
             return [];
         }
 
-        [$urlBase, $baseQuery] = $this->buildCall('core_enrol_get_enrolled_users', []);
+        [$urlBase, $baseQuery] = $this->buildCall('core_enrol_get_enrolled_users', [
+            'options' => $this->enrolledUsersOptions(),
+        ]);
 
         $out = [];
         foreach (array_chunk($ids, self::POOL_CHUNK_SIZE) as $chunk) {

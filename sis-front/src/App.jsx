@@ -98,6 +98,41 @@ const INITIAL_STUDENTS = [
 
 const SIS_TOKEN_KEY = 'sis_token';
 const SIS_TENANT_KEY = 'sis_tenant';
+const SITE_STUDENTS_CACHE_PREFIX = 'sis_site_students_';
+
+function siteStudentsCacheKey() {
+  const tenant =
+    typeof window !== 'undefined' ? window.localStorage.getItem(SIS_TENANT_KEY) || 'ecamel' : 'ecamel';
+  return `${SITE_STUDENTS_CACHE_PREFIX}${tenant}`;
+}
+
+function readSiteStudentsCache() {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem(siteStudentsCacheKey());
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!Array.isArray(data?.students)) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function writeSiteStudentsCache(students, cachedAt) {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.setItem(
+      siteStudentsCacheKey(),
+      JSON.stringify({
+        students,
+        cached_at: cachedAt || new Date().toISOString(),
+      })
+    );
+  } catch {
+    // ignore quota / private mode
+  }
+}
 const SIS_ACTIVE_ROLE_KEY = 'sis_active_role';
 const SIS_LAST_ACTIVITY_KEY = 'sis_last_activity_at';
 const SIS_IDLE_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 hours
@@ -2670,6 +2705,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
   const [detailError, setDetailError] = useState(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [studentSearch, setStudentSearch] = useState('');
+  const [studentsRefreshing, setStudentsRefreshing] = useState(false);
 
   useEffect(() => {
     if (isStudentScoped) {
@@ -2677,27 +2713,48 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
       setSelectedStudentId(String(lockedMoodleUserId));
       return;
     }
+
     let cancelled = false;
-    setLoading(true);
+    const cached = readSiteStudentsCache();
+    if (cached?.students?.length) {
+      setStudents(cached.students);
+      if (!selectedStudentId) {
+        setSelectedStudentId(String(cached.students[0].id));
+      }
+      setLoading(false);
+      setStudentsRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     setError(null);
+
     apiFetch('/api/moodle/site-students')
-      .then((res) => res.ok ? res.json() : Promise.reject(res))
+      .then((res) => (res.ok ? res.json() : Promise.reject(res)))
       .then((data) => {
-        if (!cancelled) {
-          setStudents(data.students || []);
-          if (data.students?.length && !selectedStudentId) {
-            setSelectedStudentId(String(data.students[0].id));
-          }
-          setPickerOpen(false);
+        if (cancelled) return;
+        const list = data.students || [];
+        setStudents(list);
+        writeSiteStudentsCache(list, data.cached_at);
+        if (list.length && !selectedStudentId) {
+          setSelectedStudentId(String(list[0].id));
         }
+        setPickerOpen(false);
       })
       .catch(() => {
-        if (!cancelled) setError(MSG.LOAD_STUDENTS);
+        if (!cancelled && !cached?.students?.length) {
+          setError(MSG.LOAD_STUDENTS);
+        }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setStudentsRefreshing(false);
+        }
       });
-    return () => { cancelled = true; };
+
+    return () => {
+      cancelled = true;
+    };
   }, [isStudentScoped, lockedMoodleUserId]);
 
   const filteredStudents = React.useMemo(() => {
@@ -2818,7 +2875,12 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-          <h4 className="font-bold mb-4 text-gray-800">Students &amp; Fetch</h4>
+          <h4 className="font-bold mb-4 text-gray-800 flex items-center justify-between gap-2">
+            <span>Students &amp; Fetch</span>
+            {studentsRefreshing && (
+              <span className="text-xs font-normal text-gray-400">Updating list…</span>
+            )}
+          </h4>
           {error && (
             <div className="mb-4">
               <InlineStateMessage type="error">{error}</InlineStateMessage>
