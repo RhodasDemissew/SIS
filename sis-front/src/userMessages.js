@@ -28,8 +28,8 @@ export const MSG = {
     "We couldn't load your grades right now. You can still browse categories.",
   LOAD_STUDENTS: "We couldn't load students right now. Please try again.",
 
-  FETCH_GRADES_SUCCESS: 'Grades updated successfully.',
-  FETCH_GRADES_FAILED: "We couldn't update grades. Please try again.",
+  FETCH_GRADES_SUCCESS: 'Grades fetched successfully.',
+  FETCH_GRADES_FAILED: "We couldn't fetch grades. Please try again.",
 
   EMPTY_NO_STUDENTS_COURSE: 'No enrolled students found for this course.',
   EMPTY_NO_STUDENTS_FOUND: 'No students found.',
@@ -63,4 +63,19 @@ export function loginMessageForStatus(status) {
   if (status >= 500) return MSG.AUTH_UNAVAILABLE;
   if (status >= 400) return MSG.AUTH_SIGN_IN_FAILED;
   return MSG.AUTH_UNAVAILABLE;
+}
+
+export function connectionCheckingMessage(lmsName) {
+  const site = lmsName?.trim() || 'your learning site';
+  return `Checking connection to ${site}…`;
+}
+
+export function connectionOkMessage(lmsName) {
+  const site = lmsName?.trim() || 'your learning site';
+  return `Connection to ${site} is up.`;
+}
+
+export function connectionUnavailableMessage(lmsName) {
+  const site = lmsName?.trim() || 'your learning site';
+  return `Connection to ${site} is unavailable right now. Please try again later.`;
 }

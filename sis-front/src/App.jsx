@@ -25,7 +25,14 @@ import {
   Calendar,
   Download
 } from 'lucide-react';
-import { MSG, messageForHttpStatus, loginMessageForStatus } from './userMessages';
+import {
+  MSG,
+  messageForHttpStatus,
+  loginMessageForStatus,
+  connectionCheckingMessage,
+  connectionOkMessage,
+  connectionUnavailableMessage,
+} from './userMessages';
 
 /** Build and download a CSV file. rows: array of arrays (first = header) or array of objects. */
 function downloadCsv(filename, rows) {
@@ -137,6 +144,19 @@ const SIS_ACTIVE_ROLE_KEY = 'sis_active_role';
 const SIS_LAST_ACTIVITY_KEY = 'sis_last_activity_at';
 const SIS_IDLE_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 hours
 const SIS_ALLOWED_ROLES = ['admin', 'student'];
+const LMS_NAME_FALLBACK = {
+  ecamel: 'DNEC ECAMEL LMS',
+  etss: 'DNEC ETSS LMS',
+};
+
+function resolveLmsName(tenantId, tenantLabel) {
+  if (tenantLabel && String(tenantLabel).trim()) {
+    return String(tenantLabel).trim();
+  }
+  const id = String(tenantId || 'ecamel').toLowerCase();
+  return LMS_NAME_FALLBACK[id] || 'LMS';
+}
+
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
 
 function buildApiUrl(path) {
@@ -313,6 +333,12 @@ const App = () => {
     if (typeof window === 'undefined') return 'admin';
     return window.localStorage.getItem(SIS_ACTIVE_ROLE_KEY) || 'admin';
   });
+  const [lmsName, setLmsName] = useState(() =>
+    resolveLmsName(
+      typeof window !== 'undefined' ? window.localStorage.getItem(SIS_TENANT_KEY) : 'ecamel',
+      null
+    )
+  );
   const pathname = (location.pathname || '/').replace(/^\//, '') || 'dashboard';
   const activeTab = pathname;
   const [students, setStudents] = useState(INITIAL_STUDENTS);
@@ -364,6 +390,7 @@ const App = () => {
         if (data.tenant && typeof window !== 'undefined') {
           window.localStorage.setItem(SIS_TENANT_KEY, data.tenant);
         }
+        setLmsName(resolveLmsName(data.tenant, data.tenant_label));
         const rolesRaw = Array.isArray(user?.roles) && user.roles.length ? user.roles : ['admin'];
         const roles = rolesRaw.filter((role) => SIS_ALLOWED_ROLES.includes(role));
         if (!roles.length) roles.push('student');
@@ -483,7 +510,7 @@ const App = () => {
 
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard role={userRole} />;
+        return <Dashboard role={userRole} lmsName={lmsName} />;
       case 'registration':
         return <StudentRegistration courses={courses} />;
       case 'roster':
@@ -627,7 +654,7 @@ const App = () => {
 
 // --- SUB-COMPONENTS ---
 
-const Dashboard = ({ role }) => {
+const Dashboard = ({ role, lmsName }) => {
   const [loading, setLoading] = useState(role === 'admin');
   const [error, setError] = useState(null);
   const [gradeLevels, setGradeLevels] = useState(null);
@@ -856,12 +883,12 @@ const Dashboard = ({ role }) => {
               <FileText className="text-amber-600" size={24} />
             </div>
           </div>
-          <h3 className="text-gray-500 text-sm font-medium">Last grade update</h3>
+          <h3 className="text-gray-500 text-sm font-medium">Last grade fetch</h3>
           <p className="text-sm font-semibold text-gray-900 mt-1">
-            {formattedLastFetch || 'No grade update recorded yet'}
+            {formattedLastFetch || 'No grade fetch recorded yet'}
           </p>
           <p className="text-[11px] text-gray-400 mt-1">
-            Updated whenever grades are refreshed in Grade sync.
+            Recorded when grades are fetched in Grade sync.
           </p>
         </div>
       </div>
@@ -874,13 +901,13 @@ const Dashboard = ({ role }) => {
                 moodleOk === null ? 'bg-gray-300' : moodleOk ? 'bg-green-500' : 'bg-red-500'
               }`}
             />
-            <h3 className="text-sm font-semibold text-gray-900">Connection status</h3>
+            <h3 className="text-sm font-semibold text-gray-900">Connection to {lmsName}</h3>
           </div>
         </div>
         <p className="text-sm text-gray-600">
-          {moodleOk === null && MSG.CONNECTION_CHECKING}
-          {moodleOk === true && MSG.CONNECTION_OK}
-          {moodleOk === false && MSG.CONNECTION_UNAVAILABLE}
+          {moodleOk === null && connectionCheckingMessage(lmsName)}
+          {moodleOk === true && connectionOkMessage(lmsName)}
+          {moodleOk === false && connectionUnavailableMessage(lmsName)}
         </p>
       </div>
 
@@ -2967,7 +2994,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
                 disabled={!selectedStudentId || fetching}
                 className="w-full px-4 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
               >
-                {fetching ? 'Fetching…' : isStudentScoped ? 'Load my grades' : 'Update grades'}
+                {fetching ? 'Fetching…' : isStudentScoped ? 'Load my grades' : 'Fetch grades'}
               </button>
             </div>
           )}
@@ -3002,7 +3029,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
           </div>
           {grades.length === 0 ? (
             <p className="text-gray-500 text-sm">
-              Select a student and click &quot;Update grades&quot; to see grades here.
+              Select a student and click &quot;Fetch grades&quot; to see grades here.
             </p>
           ) : (
             <div className="space-y-2">
