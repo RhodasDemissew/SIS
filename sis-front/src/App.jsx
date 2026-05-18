@@ -355,6 +355,9 @@ function applyAuthFromPayload(data, { setCurrentUser, setLmsName, setUserRole })
   const preferred = storedRole || (roles.includes('admin') ? 'admin' : roles[0]);
   const nextRole = roles.includes(preferred) ? preferred : roles[0];
   setUserRole(nextRole);
+  if (data?.session) {
+    persistSessionMeta(data.session);
+  }
   if (typeof window !== 'undefined') {
     window.localStorage.setItem(SIS_ACTIVE_ROLE_KEY, nextRole);
   }
@@ -362,8 +365,77 @@ function applyAuthFromPayload(data, { setCurrentUser, setLmsName, setUserRole })
 
 const SIS_ACTIVE_ROLE_KEY = 'sis_active_role';
 const SIS_LAST_ACTIVITY_KEY = 'sis_last_activity_at';
-const SIS_IDLE_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 hours
+const SIS_SESSION_EXPIRES_KEY = 'sis_session_expires_at';
+const SIS_IDLE_MINUTES_KEY = 'sis_idle_timeout_minutes';
+const SIS_LOGOUT_NOTICE_KEY = 'sis_logout_notice';
+const DEFAULT_IDLE_MINUTES = 180;
 const SIS_ALLOWED_ROLES = ['admin', 'student'];
+
+function parseIdleMinutesFromEnv() {
+  const raw = import.meta.env.VITE_SIS_IDLE_TIMEOUT_MINUTES;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_IDLE_MINUTES;
+}
+
+function getStoredIdleTimeoutMs() {
+  if (typeof window === 'undefined') return DEFAULT_IDLE_MINUTES * 60 * 1000;
+  const raw = window.localStorage.getItem(SIS_IDLE_MINUTES_KEY);
+  const minutes = raw ? Number(raw) : parseIdleMinutesFromEnv();
+  const safe = Number.isFinite(minutes) && minutes > 0 ? minutes : DEFAULT_IDLE_MINUTES;
+  return safe * 60 * 1000;
+}
+
+function persistSessionMeta(session, { resetActivity = false } = {}) {
+  if (typeof window === 'undefined' || !session) return;
+  if (session.expires_at) {
+    window.localStorage.setItem(SIS_SESSION_EXPIRES_KEY, String(session.expires_at));
+  }
+  if (session.idle_timeout_minutes != null) {
+    window.localStorage.setItem(SIS_IDLE_MINUTES_KEY, String(session.idle_timeout_minutes));
+  }
+  if (resetActivity) {
+    window.localStorage.setItem(SIS_LAST_ACTIVITY_KEY, String(Date.now()));
+  }
+}
+
+function clearAuthStorage() {
+  if (typeof window === 'undefined') return;
+  window.localStorage.removeItem(SIS_TOKEN_KEY);
+  window.localStorage.removeItem(SIS_TENANT_KEY);
+  window.localStorage.removeItem(SIS_ACTIVE_ROLE_KEY);
+  window.localStorage.removeItem(SIS_LAST_ACTIVITY_KEY);
+  window.localStorage.removeItem(SIS_SESSION_EXPIRES_KEY);
+  window.localStorage.removeItem(SIS_IDLE_MINUTES_KEY);
+}
+
+function isAbsoluteSessionExpired() {
+  if (typeof window === 'undefined') return false;
+  const raw = window.localStorage.getItem(SIS_SESSION_EXPIRES_KEY);
+  if (!raw) return false;
+  const expiresAt = Date.parse(raw);
+  return Number.isFinite(expiresAt) && Date.now() >= expiresAt;
+}
+
+function isIdleSessionExpired() {
+  if (typeof window === 'undefined') return false;
+  const raw = window.localStorage.getItem(SIS_LAST_ACTIVITY_KEY);
+  if (!raw) return false;
+  const lastActivityAt = Number(raw);
+  if (!Number.isFinite(lastActivityAt)) return false;
+  return Date.now() - lastActivityAt >= getStoredIdleTimeoutMs();
+}
+
+function readInitialAuthState() {
+  if (typeof window === 'undefined') return { loggedIn: false };
+  const token = window.localStorage.getItem(SIS_TOKEN_KEY);
+  if (!token) return { loggedIn: false };
+  if (isAbsoluteSessionExpired() || isIdleSessionExpired()) {
+    clearAuthStorage();
+    sessionStorage.setItem(SIS_LOGOUT_NOTICE_KEY, MSG.SESSION_EXPIRED);
+    return { loggedIn: false };
+  }
+  return { loggedIn: true };
+}
 
 /** Shared nav labels & icons (same names for admin and student where purpose matches). */
 const SIS_NAV = {
@@ -403,10 +475,8 @@ function apiFetch(url, options = {}) {
   if (activeRole && SIS_ALLOWED_ROLES.includes(activeRole)) headers['X-SIS-ROLE'] = activeRole;
   return fetch(buildApiUrl(url), { ...options, headers }).then((res) => {
     if (res.status === 401 && typeof window !== 'undefined') {
-      window.localStorage.removeItem(SIS_TOKEN_KEY);
-      window.localStorage.removeItem(SIS_TENANT_KEY);
-      window.localStorage.removeItem(SIS_ACTIVE_ROLE_KEY);
-      if (window.__sisOnUnauthorized) window.__sisOnUnauthorized();
+      clearAuthStorage();
+      if (window.__sisOnUnauthorized) window.__sisOnUnauthorized('expired');
     }
     if (res.status === 403 && typeof window !== 'undefined') {
       if (window.__sisOnForbidden) window.__sisOnForbidden();
@@ -434,6 +504,15 @@ const LandingLogin = ({ onLogin }) => {
   const [tenants, setTenants] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [sessionNotice, setSessionNotice] = useState(null);
+
+  useEffect(() => {
+    const notice = sessionStorage.getItem(SIS_LOGOUT_NOTICE_KEY);
+    if (notice) {
+      setSessionNotice(notice);
+      sessionStorage.removeItem(SIS_LOGOUT_NOTICE_KEY);
+    }
+  }, []);
 
   useEffect(() => {
     fetch(buildApiUrl('/api/tenants'))
@@ -470,6 +549,7 @@ const LandingLogin = ({ onLogin }) => {
       if (data.token && typeof window !== 'undefined') {
         window.localStorage.setItem(SIS_TOKEN_KEY, data.token);
         window.localStorage.setItem(SIS_TENANT_KEY, data.tenant || tenant);
+        persistSessionMeta(data.session, { resetActivity: true });
         onLogin(data);
       } else {
         setError(MSG.AUTH_UNEXPECTED);
@@ -493,6 +573,11 @@ const LandingLogin = ({ onLogin }) => {
             </p>
           </div>
           <form onSubmit={handleSubmit} autoComplete="off" className="p-8 pt-6 space-y-5">
+            {sessionNotice && (
+              <p className="text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-4 py-2 text-sm">
+                {sessionNotice}
+              </p>
+            )}
             {error && (
               <p className="text-red-600 bg-red-50 border border-red-100 rounded-xl px-4 py-2 text-sm">{error}</p>
             )}
@@ -552,7 +637,7 @@ const LandingLogin = ({ onLogin }) => {
 
 const App = () => {
   const location = useLocation();
-  const [isLoggedIn, setIsLoggedIn] = useState(() => typeof window !== 'undefined' && !!window.localStorage.getItem(SIS_TOKEN_KEY));
+  const [isLoggedIn, setIsLoggedIn] = useState(() => readInitialAuthState().loggedIn);
   const [currentUser, setCurrentUser] = useState(null);
   const [globalNotice, setGlobalNotice] = useState(null);
   const [userRole, setUserRole] = useState(() => {
@@ -571,7 +656,9 @@ const App = () => {
   const [courses, setCourses] = useState(INITIAL_COURSES);
 
   const handleLogin = React.useCallback((session) => {
-    if (typeof window !== 'undefined') {
+    if (session?.session) {
+      persistSessionMeta(session.session, { resetActivity: true });
+    } else if (typeof window !== 'undefined') {
       window.localStorage.setItem(SIS_LAST_ACTIVITY_KEY, String(Date.now()));
     }
     if (session?.user) {
@@ -584,21 +671,21 @@ const App = () => {
     setIsLoggedIn(true);
   }, []);
 
-  const handleLogout = React.useCallback(() => {
+  const handleLogout = React.useCallback((reason) => {
     const hadToken = typeof window !== 'undefined' && !!window.localStorage.getItem(SIS_TOKEN_KEY);
     if (hadToken) {
       apiFetch('/api/logout', { method: 'POST' }).catch(() => {});
     }
-    if (typeof window !== 'undefined') window.localStorage.removeItem(SIS_TOKEN_KEY);
-    if (typeof window !== 'undefined') window.localStorage.removeItem(SIS_TENANT_KEY);
-    if (typeof window !== 'undefined') window.localStorage.removeItem(SIS_ACTIVE_ROLE_KEY);
-    if (typeof window !== 'undefined') window.localStorage.removeItem(SIS_LAST_ACTIVITY_KEY);
+    clearAuthStorage();
+    if (reason === 'idle' || reason === 'expired') {
+      sessionStorage.setItem(SIS_LOGOUT_NOTICE_KEY, MSG.SESSION_EXPIRED);
+    }
     setCurrentUser(null);
     setIsLoggedIn(false);
   }, []);
 
   React.useEffect(() => {
-    window.__sisOnUnauthorized = handleLogout;
+    window.__sisOnUnauthorized = (reason) => handleLogout(reason || 'expired');
     window.__sisOnForbidden = () => {
       setGlobalNotice({
         type: 'warning',
@@ -621,7 +708,7 @@ const App = () => {
         applyAuthFromPayload(data, { setCurrentUser, setLmsName, setUserRole });
       })
       .catch(() => {
-        if (!cancelled) handleLogout();
+        if (!cancelled) handleLogout('expired');
       });
     return () => {
       cancelled = true;
@@ -641,26 +728,20 @@ const App = () => {
     };
 
     const checkIdleTimeout = () => {
-      const raw = window.localStorage.getItem(SIS_LAST_ACTIVITY_KEY);
-      const lastActivityAt = raw ? Number(raw) : Date.now();
-      if (!Number.isFinite(lastActivityAt)) {
-        window.localStorage.setItem(SIS_LAST_ACTIVITY_KEY, String(Date.now()));
-        return;
+      if (isAbsoluteSessionExpired() || isIdleSessionExpired()) {
+        handleLogout('idle');
+        return true;
       }
-      if (Date.now() - lastActivityAt >= SIS_IDLE_TIMEOUT_MS) {
-        handleLogout();
-      }
+      return false;
     };
 
-    // Initialize activity marker for current session.
-    touchActivity();
+    if (checkIdleTimeout()) return;
 
     const activityEvents = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'click'];
     activityEvents.forEach((evt) => window.addEventListener(evt, touchActivity, { passive: true }));
     window.addEventListener('focus', touchActivity);
     const onVisibilityChange = () => {
-      if (!document.hidden) {
-        checkIdleTimeout();
+      if (!document.hidden && !checkIdleTimeout()) {
         touchActivity();
       }
     };
@@ -815,7 +896,7 @@ const App = () => {
             </div>
           </div>
           <button
-            onClick={handleLogout}
+            onClick={() => handleLogout()}
             className="w-full flex items-center space-x-3 px-4 py-3 text-indigo-400 hover:text-white hover:bg-indigo-900 rounded-xl transition-colors"
           >
             <LogOut size={18} />

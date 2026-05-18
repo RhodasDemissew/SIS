@@ -147,14 +147,15 @@ class AuthController extends Controller
             ]
         );
 
-        $token = ApiToken::createTokenFor($user, $tenant);
+        $apiToken = ApiToken::createTokenFor($user, $tenant);
 
         $tenantLabel = (string) (SisTenant::config($tenant)['label'] ?? $tenant);
 
         return response()->json([
-            'token' => $token,
+            'token' => $apiToken->token,
             'tenant' => $tenant,
             'tenant_label' => $tenantLabel,
+            'session' => $apiToken->sessionMeta(),
             'user' => [
                 'id' => $user->id,
                 'name' => $user->name,
@@ -193,10 +194,10 @@ class AuthController extends Controller
         if (! $user) {
             return response()->json(['message' => 'Unauthenticated'], 401);
         }
+        $apiToken = $request->attributes->get('api_token');
         $tenant = $request->attributes->get('sis_tenant');
-        if ($tenant === null && $request->bearerToken()) {
-            $apiToken = \App\Models\ApiToken::where('token', $request->bearerToken())->first();
-            $tenant = $apiToken?->tenant;
+        if ($tenant === null && $apiToken?->tenant) {
+            $tenant = $apiToken->tenant;
         }
 
         $tenantId = $tenant !== null ? (string) $tenant : SisTenant::defaultId();
@@ -204,7 +205,7 @@ class AuthController extends Controller
             ? (string) (SisTenant::config($tenantId)['label'] ?? $tenantId)
             : $tenantId;
 
-        return response()->json([
+        $payload = [
             'tenant' => $tenant,
             'tenant_label' => $tenantLabel,
             'user' => [
@@ -214,6 +215,12 @@ class AuthController extends Controller
                 'moodle_user_id' => $user->moodle_user_id,
                 'roles' => $user->roleList(),
             ],
-        ]);
+        ];
+
+        if ($apiToken instanceof ApiToken) {
+            $payload['session'] = $apiToken->sessionMeta();
+        }
+
+        return response()->json($payload);
     }
 }
