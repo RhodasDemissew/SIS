@@ -11,6 +11,7 @@ import {
   LogOut,
   UserCircle,
   Link as LinkIcon,
+  BarChart3,
   CheckCircle,
   AlertCircle,
   UserPlus,
@@ -363,6 +364,12 @@ const SIS_ACTIVE_ROLE_KEY = 'sis_active_role';
 const SIS_LAST_ACTIVITY_KEY = 'sis_last_activity_at';
 const SIS_IDLE_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 hours
 const SIS_ALLOWED_ROLES = ['admin', 'student'];
+
+/** Shared nav labels & icons (same names for admin and student where purpose matches). */
+const SIS_NAV = {
+  curriculum: { label: 'Browse Grades', icon: GraduationCap },
+  moodle: { label: 'Grade Reports', icon: BarChart3 },
+};
 const LMS_NAME_FALLBACK = {
   ecamel: 'DNEC ECAMEL LMS',
   etss: 'DNEC ETSS LMS',
@@ -673,13 +680,13 @@ const App = () => {
     () => ({
       student: [
         { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-        { id: 'curriculum', label: 'Grades Explorer', icon: GraduationCap },
-        { id: 'moodle', label: 'Grade sync', icon: LinkIcon },
+        { id: 'curriculum', label: SIS_NAV.curriculum.label, icon: SIS_NAV.curriculum.icon },
+        { id: 'moodle', label: SIS_NAV.moodle.label, icon: SIS_NAV.moodle.icon },
       ],
       admin: [
         { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-        { id: 'curriculum', label: 'Grades Explorer', icon: BookOpen },
-        { id: 'moodle', label: 'Grade sync', icon: LinkIcon },
+        { id: 'curriculum', label: SIS_NAV.curriculum.label, icon: SIS_NAV.curriculum.icon },
+        { id: 'moodle', label: SIS_NAV.moodle.label, icon: SIS_NAV.moodle.icon },
       ],
     }),
     []
@@ -1098,7 +1105,7 @@ const Dashboard = ({ role, lmsName }) => {
             {formattedLastFetch || 'No grade fetch recorded yet'}
           </p>
           <p className="text-[11px] text-gray-400 mt-1">
-            Recorded when grades are fetched in Grade sync.
+            Recorded when grades are fetched in Grade Reports.
           </p>
         </div>
       </div>
@@ -1622,8 +1629,8 @@ const CurriculumModule = () => {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div>
-          <h3 className="text-xl font-bold text-gray-900">Grades Explorer</h3>
-          <p className="text-sm text-gray-500">Grade level → Course → Students &amp; grades</p>
+          <h3 className="text-xl font-bold text-gray-900">{SIS_NAV.curriculum.label}</h3>
+          <p className="text-sm text-gray-500">Grade level → course → students and grades</p>
         </div>
         <button
           onClick={toggleCompare}
@@ -2740,7 +2747,7 @@ const StudentCurriculumExplorer = ({ moodleUserId, studentName }) => {
   return (
     <div className="space-y-6">
       <div className="bg-indigo-900 border border-indigo-100 p-8 rounded-3xl text-white shadow-xl shadow-indigo-100">
-        <h3 className="text-xl font-black uppercase tracking-tight">Grades Explorer</h3>
+        <h3 className="text-xl font-black uppercase tracking-tight">{SIS_NAV.curriculum.label}</h3>
         <p className="text-indigo-200 text-sm mt-1">
           {studentName ? `${studentName}, ` : ''}select a grade level, then a course, then view your detailed grades.
         </p>
@@ -3064,14 +3071,14 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
     <div className="space-y-6">
       <div className="bg-indigo-900 border border-indigo-100 p-8 rounded-3xl flex items-start space-x-6 text-white shadow-xl shadow-indigo-100">
         <div className="bg-white/10 p-4 rounded-2xl backdrop-blur-md">
-          <LinkIcon size={32} className="text-indigo-300" />
+          <BarChart3 size={32} className="text-indigo-300" />
         </div>
         <div>
-          <h3 className="text-xl font-black uppercase tracking-tight text-white">Grade sync</h3>
+          <h3 className="text-xl font-black uppercase tracking-tight text-white">{SIS_NAV.moodle.label}</h3>
           <p className="text-indigo-200 text-sm mt-1 max-w-md">
             {isStudentScoped
-              ? 'Quick sync view for your account. Use Grades Explorer for structured level → course → grade navigation.'
-              : 'Search for a student, select them, then update their grades.'}
+              ? `Fetch your latest grades and see how you are doing by course. Use ${SIS_NAV.curriculum.label} for level → course → detailed navigation.`
+              : 'Search for a student, fetch their grades, and review performance by course.'}
           </p>
         </div>
       </div>
