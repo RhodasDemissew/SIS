@@ -102,21 +102,28 @@ class AuthController extends Controller
         )));
         $adminUsernamesLc = array_map('strtolower', $adminUsernames);
         $adminEmailsLc = array_map('strtolower', $adminEmails);
-        $moodleRoleShortnames = Cache::remember(
-            "auth:moodle-user-role-shortnames:{$tenant}:{$moodleUserId}",
-            now()->addMinutes(10),
-            fn () => $this->moodle->getUserRoleShortnamesFromCourses($moodleUserId)
-        );
 
         $existingUser = User::where('moodle_user_id', $moodleUserId)
             ->orWhere('email', $email !== '' ? $email : ($username.'@lms.local'))
             ->first();
         $existingRoles = $existingUser?->roleList() ?? [];
 
-        $isAdmin = in_array(strtolower($username), $adminUsernamesLc, true) ||
+        $isAdminByConfig = in_array(strtolower($username), $adminUsernamesLc, true) ||
             ($email !== '' && in_array(strtolower($email), $adminEmailsLc, true)) ||
-            count(array_intersect($adminMoodleRoleShortnames, is_array($moodleRoleShortnames) ? $moodleRoleShortnames : [])) > 0 ||
             in_array('admin', $existingRoles, true);
+
+        // Role scan hits many courses; skip when admin is already known (keeps login fast).
+        $moodleRoleShortnames = [];
+        if (! $isAdminByConfig) {
+            $moodleRoleShortnames = Cache::remember(
+                "auth:moodle-user-role-shortnames:{$tenant}:{$moodleUserId}",
+                now()->addMinutes(10),
+                fn () => $this->moodle->getUserRoleShortnamesFromCourses($moodleUserId)
+            );
+        }
+
+        $isAdmin = $isAdminByConfig ||
+            count(array_intersect($adminMoodleRoleShortnames, is_array($moodleRoleShortnames) ? $moodleRoleShortnames : [])) > 0;
 
         // Create or update a local SIS user record. Password is random; Moodle is source of truth for auth.
         $allowedRoles = ['admin', 'student'];

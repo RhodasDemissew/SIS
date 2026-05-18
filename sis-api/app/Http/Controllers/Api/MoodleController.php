@@ -61,14 +61,31 @@ class MoodleController extends Controller
      *   cached_at: string
      * }|null
      */
-    private function rememberSiteEnrolmentData(bool $forceRefresh = false): ?array
+    private function forgetSiteCaches(): void
     {
-        $cacheKey = $this->moodleCacheKey('site_enrolment_data');
+        Cache::forget($this->moodleCacheKey('site_structure'));
+        Cache::forget($this->moodleCacheKey('site_enrolment_data'));
+        Cache::forget($this->moodleCacheKey('site_students'));
+        Cache::forget($this->moodleCacheKey('overview_metrics'));
+    }
+
+    /**
+     * Fast path: categories + course counts only (no per-course enrolment scan).
+     *
+     * @return array{
+     *   categories: array<int, array{id: int, name: string}>,
+     *   course_to_category: array<int, int>,
+     *   total_categories: int,
+     *   total_courses: int,
+     *   cached_at: string
+     * }|null
+     */
+    private function rememberSiteStructureData(bool $forceRefresh = false): ?array
+    {
+        $cacheKey = $this->moodleCacheKey('site_structure');
 
         if ($forceRefresh) {
-            Cache::forget($cacheKey);
-            Cache::forget($this->moodleCacheKey('site_students'));
-            Cache::forget($this->moodleCacheKey('overview_metrics'));
+            $this->forgetSiteCaches();
         }
 
         return Cache::remember($cacheKey, now()->addMinutes(30), function () {
@@ -107,6 +124,32 @@ class MoodleController extends Controller
                 }
             }
 
+            return [
+                'categories' => $categories,
+                'course_to_category' => $courseToCategory,
+                'total_categories' => count($categories),
+                'total_courses' => $totalCourses,
+                'cached_at' => now()->toIso8601String(),
+            ];
+        });
+    }
+
+    private function rememberSiteEnrolmentData(bool $forceRefresh = false): ?array
+    {
+        $cacheKey = $this->moodleCacheKey('site_enrolment_data');
+
+        if ($forceRefresh) {
+            $this->forgetSiteCaches();
+        }
+
+        return Cache::remember($cacheKey, now()->addMinutes(30), function () {
+            $structure = $this->rememberSiteStructureData(false);
+            if ($structure === null) {
+                return null;
+            }
+
+            $categories = $structure['categories'];
+            $courseToCategory = $structure['course_to_category'];
             $courseIds = array_keys($courseToCategory);
             $enrolledByCourse = $this->moodle->getEnrolledUsersForCourses($courseIds);
 
@@ -160,8 +203,8 @@ class MoodleController extends Controller
 
             return [
                 'students' => $students,
-                'total_categories' => count($categories),
-                'total_courses' => $totalCourses,
+                'total_categories' => $structure['total_categories'],
+                'total_courses' => $structure['total_courses'],
                 'total_students' => count($usersById),
                 'students_per_category' => $studentBuckets,
                 'cached_at' => now()->toIso8601String(),
@@ -279,6 +322,24 @@ class MoodleController extends Controller
         }
 
         $forceRefresh = $this->canForceRefresh($request);
+        $includeStudents = $request->boolean('include_students', true);
+
+        if (! $includeStudents) {
+            $structure = $this->rememberSiteStructureData($forceRefresh);
+            if ($structure === null) {
+                return response()->json(['message' => 'Could not fetch Moodle overview metrics'], 502);
+            }
+
+            return response()->json([
+                'total_categories' => $structure['total_categories'],
+                'total_courses' => $structure['total_courses'],
+                'total_students' => null,
+                'students_per_category' => [],
+                'cached_at' => $structure['cached_at'],
+                'partial' => true,
+            ]);
+        }
+
         $data = $this->rememberSiteEnrolmentData($forceRefresh);
 
         if ($data === null) {
@@ -291,6 +352,7 @@ class MoodleController extends Controller
             'total_students' => $data['total_students'],
             'students_per_category' => $data['students_per_category'],
             'cached_at' => $data['cached_at'],
+            'partial' => false,
         ]);
     }
 

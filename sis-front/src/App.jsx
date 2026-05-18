@@ -140,6 +140,86 @@ function writeSiteStudentsCache(students, cachedAt) {
     // ignore quota / private mode
   }
 }
+
+const OVERVIEW_CACHE_PREFIX = 'sis_overview_';
+
+function overviewCacheKey() {
+  const tenant =
+    typeof window !== 'undefined' ? window.localStorage.getItem(SIS_TENANT_KEY) || 'ecamel' : 'ecamel';
+  return `${OVERVIEW_CACHE_PREFIX}${tenant}`;
+}
+
+function readOverviewCache() {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem(overviewCacheKey());
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function writeOverviewCache(metrics) {
+  if (typeof window === 'undefined' || !metrics) return;
+  try {
+    sessionStorage.setItem(overviewCacheKey(), JSON.stringify(metrics));
+  } catch {
+    // ignore
+  }
+}
+
+function applyOverviewMetrics(metrics, setters) {
+  const {
+    setGradeLevels,
+    setTotalCourses,
+    setTotalMoodleStudents,
+    setStudentsByGrade,
+    setMoodleOk,
+    setChartReady,
+  } = setters;
+  if (typeof metrics.total_categories === 'number') {
+    setGradeLevels(metrics.total_categories);
+  }
+  if (typeof metrics.total_courses === 'number') {
+    setTotalCourses(metrics.total_courses);
+  }
+  if (typeof metrics.total_students === 'number') {
+    setTotalMoodleStudents(metrics.total_students);
+  }
+  const perCat = Array.isArray(metrics.students_per_category) ? metrics.students_per_category : [];
+  if (perCat.length > 0) {
+    const counts = {};
+    perCat.forEach((row) => {
+      const name = row.category_name || `Category ${row.category_id}`;
+      counts[name] = typeof row.student_count === 'number' ? row.student_count : 0;
+    });
+    setStudentsByGrade(counts);
+    setChartReady(true);
+  }
+  setMoodleOk(true);
+}
+
+function applyAuthFromPayload(data, { setCurrentUser, setLmsName, setUserRole }) {
+  const user = data?.user || null;
+  if (!user) return;
+  setCurrentUser(user);
+  if (data.tenant && typeof window !== 'undefined') {
+    window.localStorage.setItem(SIS_TENANT_KEY, data.tenant);
+  }
+  setLmsName(resolveLmsName(data.tenant, data.tenant_label));
+  const rolesRaw = Array.isArray(user.roles) && user.roles.length ? user.roles : ['admin'];
+  const roles = rolesRaw.filter((role) => SIS_ALLOWED_ROLES.includes(role));
+  if (!roles.length) roles.push('student');
+  const storedRole = typeof window !== 'undefined' ? window.localStorage.getItem(SIS_ACTIVE_ROLE_KEY) : null;
+  const preferred = storedRole || (roles.includes('admin') ? 'admin' : roles[0]);
+  const nextRole = roles.includes(preferred) ? preferred : roles[0];
+  setUserRole(nextRole);
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(SIS_ACTIVE_ROLE_KEY, nextRole);
+  }
+}
+
 const SIS_ACTIVE_ROLE_KEY = 'sis_active_role';
 const SIS_LAST_ACTIVITY_KEY = 'sis_last_activity_at';
 const SIS_IDLE_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 hours
@@ -244,7 +324,7 @@ const LandingLogin = ({ onLogin }) => {
       if (data.token && typeof window !== 'undefined') {
         window.localStorage.setItem(SIS_TOKEN_KEY, data.token);
         window.localStorage.setItem(SIS_TENANT_KEY, data.tenant || tenant);
-        onLogin();
+        onLogin(data);
       } else {
         setError(MSG.AUTH_UNEXPECTED);
       }
@@ -344,9 +424,16 @@ const App = () => {
   const [students, setStudents] = useState(INITIAL_STUDENTS);
   const [courses, setCourses] = useState(INITIAL_COURSES);
 
-  const handleLogin = React.useCallback(() => {
+  const handleLogin = React.useCallback((session) => {
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(SIS_LAST_ACTIVITY_KEY, String(Date.now()));
+    }
+    if (session?.user) {
+      applyAuthFromPayload(session, { setCurrentUser, setLmsName, setUserRole });
+      const roles = Array.isArray(session.user.roles) ? session.user.roles : [];
+      if (roles.includes('admin')) {
+        apiFetch('/api/moodle/overview-metrics?include_students=0').catch(() => {});
+      }
     }
     setIsLoggedIn(true);
   }, []);
@@ -379,30 +466,13 @@ const App = () => {
   }, [handleLogout]);
 
   React.useEffect(() => {
-    if (!isLoggedIn) return;
+    if (!isLoggedIn || currentUser) return;
     let cancelled = false;
     apiFetch('/api/me')
       .then((res) => (res.ok ? res.json() : Promise.reject(res)))
       .then((data) => {
         if (cancelled) return;
-        const user = data.user || null;
-        setCurrentUser(user);
-        if (data.tenant && typeof window !== 'undefined') {
-          window.localStorage.setItem(SIS_TENANT_KEY, data.tenant);
-        }
-        setLmsName(resolveLmsName(data.tenant, data.tenant_label));
-        const rolesRaw = Array.isArray(user?.roles) && user.roles.length ? user.roles : ['admin'];
-        const roles = rolesRaw.filter((role) => SIS_ALLOWED_ROLES.includes(role));
-        if (!roles.length) roles.push('student');
-        const storedRole =
-          typeof window !== 'undefined' ? window.localStorage.getItem(SIS_ACTIVE_ROLE_KEY) : null;
-        const preferred =
-          storedRole || (roles.includes('admin') ? 'admin' : roles[0]);
-        const nextRole = roles.includes(preferred) ? preferred : roles[0];
-        setUserRole(nextRole);
-        if (typeof window !== 'undefined') {
-          window.localStorage.setItem(SIS_ACTIVE_ROLE_KEY, nextRole);
-        }
+        applyAuthFromPayload(data, { setCurrentUser, setLmsName, setUserRole });
       })
       .catch(() => {
         if (!cancelled) handleLogout();
@@ -410,7 +480,7 @@ const App = () => {
     return () => {
       cancelled = true;
     };
-  }, [isLoggedIn, handleLogout]);
+  }, [isLoggedIn, currentUser, handleLogout]);
 
   React.useEffect(() => {
     if (!isLoggedIn || typeof window === 'undefined') return;
@@ -655,7 +725,8 @@ const App = () => {
 // --- SUB-COMPONENTS ---
 
 const Dashboard = ({ role, lmsName }) => {
-  const [loading, setLoading] = useState(role === 'admin');
+  const [loading, setLoading] = useState(false);
+  const [statsLoading, setStatsLoading] = useState(role === 'admin');
   const [error, setError] = useState(null);
   const [gradeLevels, setGradeLevels] = useState(null);
   const [totalCourses, setTotalCourses] = useState(null);
@@ -668,64 +739,70 @@ const Dashboard = ({ role, lmsName }) => {
     return window.localStorage.getItem('sis_last_grade_fetch');
   });
 
+  const metricSetters = React.useMemo(
+    () => ({
+      setGradeLevels,
+      setTotalCourses,
+      setTotalMoodleStudents,
+      setStudentsByGrade,
+      setMoodleOk,
+      setChartReady,
+    }),
+    []
+  );
+
   useEffect(() => {
     if (role !== 'admin') return;
 
     let cancelled = false;
-    const load = (opts = {}) => {
+    const cached = readOverviewCache();
+    if (cached) {
+      applyOverviewMetrics(cached, metricSetters);
+      setLoading(false);
+      setStatsLoading(!!cached.partial);
+      if (!cached.partial) setChartReady(true);
+    } else {
       setLoading(true);
-      setError(null);
-      setChartReady(false);
+      setStatsLoading(true);
+    }
+    setError(null);
 
-      const metricsUrl = opts.refresh
-        ? '/api/moodle/overview-metrics?refresh=1'
-        : '/api/moodle/overview-metrics';
+    const fetchMetrics = (url) =>
+      apiFetch(url).then((res) => (res.ok ? res.json() : Promise.reject(new Error('metrics failed'))));
 
-      apiFetch(metricsUrl)
-        .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Failed overview metrics'))))
-        .then((metrics) => {
-          if (cancelled) return;
-          const totalCats =
-            typeof metrics.total_categories === 'number' ? metrics.total_categories : null;
-          const totalCoursesVal =
-            typeof metrics.total_courses === 'number' ? metrics.total_courses : null;
-          const totalStudentsVal =
-            typeof metrics.total_students === 'number' ? metrics.total_students : null;
+    const fastUrl = '/api/moodle/overview-metrics?include_students=0';
+    const fullUrl = '/api/moodle/overview-metrics?include_students=1';
+    let fastOk = false;
 
-          setGradeLevels(totalCats);
-          setTotalCourses(totalCoursesVal);
-          setTotalMoodleStudents(totalStudentsVal);
-
-          const perCat = Array.isArray(metrics.students_per_category)
-            ? metrics.students_per_category
-            : [];
-          const counts = {};
-          perCat.forEach((row) => {
-            const name = row.category_name || `Category ${row.category_id}`;
-            const c = typeof row.student_count === 'number' ? row.student_count : 0;
-            counts[name] = c;
-          });
-          setStudentsByGrade(counts);
-
-          setMoodleOk(true);
-          setChartReady(true);
-        })
-        .catch(() => {
-          if (cancelled) return;
+    fetchMetrics(fastUrl)
+      .then((partial) => {
+        if (cancelled) return null;
+        fastOk = true;
+        applyOverviewMetrics(partial, metricSetters);
+        setLoading(false);
+        setStatsLoading(true);
+        return fetchMetrics(fullUrl);
+      })
+      .then((full) => {
+        if (cancelled || !full) return;
+        applyOverviewMetrics(full, metricSetters);
+        writeOverviewCache(full);
+        setStatsLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        if (!fastOk) {
           setMoodleOk(false);
           setError(MSG.LOAD_DASHBOARD);
-        })
-        .finally(() => {
-          if (!cancelled) setLoading(false);
-        });
-    };
-
-    load();
+        }
+        setLoading(false);
+        setStatsLoading(false);
+      });
 
     return () => {
       cancelled = true;
     };
-  }, [role]);
+  }, [role, metricSetters]);
 
   // Non-admin roles keep a simple static dashboard for now.
   if (role !== 'admin') {
@@ -774,57 +851,30 @@ const Dashboard = ({ role, lmsName }) => {
           <p className="text-sm text-gray-500">At-a-glance overview for administrators.</p>
         </div>
         <div className="flex items-center gap-3">
-          {loading && (
-            <span className="text-xs font-medium text-gray-400">Loading live stats…</span>
+          {(loading || statsLoading) && (
+            <span className="text-xs font-medium text-gray-400">
+              {loading ? 'Loading dashboard…' : 'Loading student counts…'}
+            </span>
           )}
           <button
             type="button"
             onClick={async () => {
-              // Re-run the effect body with refresh flag via a small helper.
-              // We can't directly call the effect function, so we trigger a manual fetch here.
-              let cancelled = false;
-              setLoading(true);
+              setStatsLoading(true);
               setError(null);
               setChartReady(false);
-              const metricsUrl = '/api/moodle/overview-metrics?refresh=1';
               try {
-                const metricsRes = await apiFetch(metricsUrl);
-                if (!metricsRes.ok) {
-                  throw new Error('Failed to refresh dashboard stats');
-                }
+                const metricsRes = await apiFetch(
+                  '/api/moodle/overview-metrics?refresh=1&include_students=1'
+                );
+                if (!metricsRes.ok) throw new Error('refresh failed');
                 const metrics = await metricsRes.json();
-                if (cancelled) return;
-                const totalCats =
-                  typeof metrics.total_categories === 'number' ? metrics.total_categories : null;
-                const totalCoursesVal =
-                  typeof metrics.total_courses === 'number' ? metrics.total_courses : null;
-                const totalStudentsVal =
-                  typeof metrics.total_students === 'number' ? metrics.total_students : null;
-
-                setGradeLevels(totalCats);
-                setTotalCourses(totalCoursesVal);
-                setTotalMoodleStudents(totalStudentsVal);
-
-                const perCat = Array.isArray(metrics.students_per_category)
-                  ? metrics.students_per_category
-                  : [];
-                const counts = {};
-                perCat.forEach((row) => {
-                  const name = row.category_name || `Category ${row.category_id}`;
-                  const c = typeof row.student_count === 'number' ? row.student_count : 0;
-                  counts[name] = c;
-                });
-                setStudentsByGrade(counts);
-
-                setMoodleOk(true);
-                setChartReady(true);
+                applyOverviewMetrics(metrics, metricSetters);
+                writeOverviewCache(metrics);
               } catch {
-                if (!cancelled) {
-                  setMoodleOk(false);
-                  setError(MSG.LOAD_DASHBOARD_REFRESH);
-                }
+                setMoodleOk(false);
+                setError(MSG.LOAD_DASHBOARD_REFRESH);
               } finally {
-                if (!cancelled) setLoading(false);
+                setStatsLoading(false);
               }
             }}
             className="px-3 py-1.5 text-xs font-semibold text-gray-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg border border-gray-200"
