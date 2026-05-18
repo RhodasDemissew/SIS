@@ -7,18 +7,32 @@ use Illuminate\Support\Facades\Http;
 class MoodleService
 {
     private const POOL_CHUNK_SIZE = 20;
+
     protected string $baseUrl;
 
     protected ?string $token;
+
     protected int $timeoutSeconds;
+
     protected int $connectTimeoutSeconds;
 
-    public function __construct()
-    {
-        $this->baseUrl = config('services.moodle.url', '');
-        $this->token = config('services.moodle.token');
-        $this->timeoutSeconds = (int) config('services.moodle.timeout', 20);
-        $this->connectTimeoutSeconds = (int) config('services.moodle.connect_timeout', 8);
+    protected string $loginService;
+
+    /** @var array<string, mixed>|null Last login/token.php error (no password stored). */
+    protected ?array $lastAuthError = null;
+
+    public function __construct(
+        string $baseUrl = '',
+        ?string $token = null,
+        int $timeoutSeconds = 20,
+        int $connectTimeoutSeconds = 8,
+        string $loginService = '',
+    ) {
+        $this->baseUrl = rtrim($baseUrl, '/');
+        $this->token = $token;
+        $this->timeoutSeconds = $timeoutSeconds;
+        $this->connectTimeoutSeconds = $connectTimeoutSeconds;
+        $this->loginService = trim($loginService);
     }
 
     public function isConfigured(): bool
@@ -27,20 +41,22 @@ class MoodleService
     }
 
     /**
-     * Authenticate a Moodle user via login/token.php using username + password.
-     *
-     * Moodle validates the credentials and returns a token + userid.
-     *
-     * @return array<string, mixed>|null
+     * @return array<string, mixed>|null Last login/token.php error (no password).
      */
+    public function lastAuthError(): ?array
+    {
+        return $this->lastAuthError;
+    }
+
     public function authenticateUser(string $username, string $password): ?array
     {
+        $this->lastAuthError = null;
+
         if (empty($this->baseUrl) || $username === '' || $password === '') {
             return null;
         }
 
-        $service = (string) config('services.moodle.login_service', '');
-        $service = trim($service);
+        $service = $this->loginService;
         // Common .env mistake: quoting or leading/trailing spaces.
         if (str_starts_with($service, '"') && str_ends_with($service, '"')) {
             $service = trim($service, '"');
@@ -62,14 +78,24 @@ class MoodleService
         ]);
 
         if (! $response->successful()) {
+            $this->lastAuthError = [
+                'error' => 'HTTP request failed',
+                'errorcode' => 'http_'.$response->status(),
+                'http_status' => $response->status(),
+            ];
+
             return null;
         }
 
         $body = $response->json();
         if (! is_array($body)) {
+            $this->lastAuthError = ['error' => 'Invalid JSON from Moodle', 'errorcode' => 'invalid_response'];
+
             return null;
         }
         if (isset($body['error']) || isset($body['exception'])) {
+            $this->lastAuthError = $body;
+
             return null;
         }
 

@@ -16,6 +16,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'auth.api' => \App\Http\Middleware\AuthenticateApiToken::class,
             'require.role' => \App\Http\Middleware\RequireRole::class,
+            'sis.tenant' => \App\Http\Middleware\ResolveSisTenant::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

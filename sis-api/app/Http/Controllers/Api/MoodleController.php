@@ -18,6 +18,13 @@ class MoodleController extends Controller
         protected MoodleService $moodle
     ) {}
 
+    private function moodleCacheKey(string $suffix): string
+    {
+        $tenant = (string) request()->attributes->get('sis_tenant', 'ecamel');
+
+        return "moodle:{$tenant}:{$suffix}";
+    }
+
     private function activeRole(Request $request): string
     {
         $requested = (string) $request->header('X-SIS-ROLE', 'admin');
@@ -85,7 +92,7 @@ class MoodleController extends Controller
         }
 
         $forceRefresh = $request->boolean('refresh', false);
-        $cacheKey = 'moodle_categories';
+        $cacheKey = $this->moodleCacheKey('categories');
         if ($forceRefresh) {
             Cache::forget($cacheKey);
         }
@@ -127,7 +134,7 @@ class MoodleController extends Controller
         }
 
         $forceRefresh = $this->canForceRefresh($request);
-        $cacheKey = 'moodle_site_students';
+        $cacheKey = $this->moodleCacheKey('site_students');
 
         if ($forceRefresh) {
             Cache::forget($cacheKey);
@@ -222,7 +229,7 @@ class MoodleController extends Controller
         }
 
         $forceRefresh = $this->canForceRefresh($request);
-        $cacheKey = 'moodle_overview_metrics';
+        $cacheKey = $this->moodleCacheKey('overview_metrics');
 
         if ($forceRefresh) {
             Cache::forget($cacheKey);
@@ -327,7 +334,7 @@ class MoodleController extends Controller
 
         $categoryIdInt = (int) $categoryId;
         $forceRefresh = $request->boolean('refresh', false);
-        $cacheKey = 'moodle_courses_by_category_'.$categoryIdInt;
+        $cacheKey = $this->moodleCacheKey('courses_by_category_'.$categoryIdInt);
         if ($forceRefresh) {
             Cache::forget($cacheKey);
         }
@@ -372,7 +379,7 @@ class MoodleController extends Controller
         $forceRefresh = $this->canForceRefresh($request);
 
         // Cache the transformed list for a short period to speed up repeated requests.
-        $cacheKey = 'moodle_course_students_'.$courseIdInt;
+        $cacheKey = $this->moodleCacheKey('course_students_'.$courseIdInt);
 
         if ($forceRefresh) {
             Cache::forget($cacheKey);
@@ -569,7 +576,7 @@ class MoodleController extends Controller
             }
         }
         $forceRefresh = $this->canForceRefresh($request);
-        $cacheKey = 'moodle_student_report_'.$moodleUserIdInt;
+        $cacheKey = $this->moodleCacheKey('student_report_'.$moodleUserIdInt);
         if ($forceRefresh) {
             Cache::forget($cacheKey);
         }
@@ -671,7 +678,7 @@ class MoodleController extends Controller
         $courseIdInt = (int) $courseId;
 
         $forceRefresh = $this->canForceRefresh($request);
-        $cacheKey = 'moodle_course_details_'.$student->id.'_'.$courseIdInt;
+        $cacheKey = $this->moodleCacheKey('course_details_'.$student->id.'_'.$courseIdInt);
         if ($forceRefresh) {
             Cache::forget($cacheKey);
         }
@@ -736,7 +743,7 @@ class MoodleController extends Controller
         }
 
         $forceRefresh = $this->canForceRefresh($request);
-        $cacheKey = 'moodle_course_details_direct_'.$moodleUserIdInt.'_'.$courseIdInt;
+        $cacheKey = $this->moodleCacheKey('course_details_direct_'.$moodleUserIdInt.'_'.$courseIdInt);
         if ($forceRefresh) {
             Cache::forget($cacheKey);
         }

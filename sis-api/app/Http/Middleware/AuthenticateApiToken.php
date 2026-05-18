@@ -26,6 +26,18 @@ class AuthenticateApiToken
         }
 
         $request->setUserResolver(fn () => $apiToken->user);
+
+        $headerTenant = $request->header('X-SIS-Tenant');
+        if ($headerTenant !== null && $headerTenant !== '' && $apiToken->tenant !== null) {
+            if (strtolower(trim($headerTenant)) !== strtolower((string) $apiToken->tenant)) {
+                return response()->json(['message' => 'Tenant mismatch for this session.'], 403);
+            }
+        }
+
+        if ($apiToken->tenant) {
+            $request->attributes->set('sis_tenant', strtolower((string) $apiToken->tenant));
+        }
+
         return $next($request);
     }
 }

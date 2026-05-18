@@ -35,14 +35,13 @@ return [
         ],
     ],
 
+    // Legacy keys — prefer config/moodle.php tenants (etss, ecamel).
     'moodle' => [
-        'url' => rtrim(env('MOODLE_URL', ''), '/'),
-        'token' => env('MOODLE_TOKEN'),
+        'url' => rtrim(env('MOODLE_ETSS_URL', env('MOODLE_URL', '')), '/'),
+        'token' => env('MOODLE_ETSS_TOKEN', env('MOODLE_TOKEN')),
         'timeout' => (int) env('MOODLE_TIMEOUT', 20),
         'connect_timeout' => (int) env('MOODLE_CONNECT_TIMEOUT', 8),
-        // Shortname of the Moodle external service used for user login (login/token.php).
-        // This is the "Short name" field in Moodle's External services UI.
-        'login_service' => env('MOODLE_LOGIN_SERVICE', 'SIS Grades Service'),
+        'login_service' => env('MOODLE_ETSS_LOGIN_SERVICE', env('MOODLE_LOGIN_SERVICE', 'SIS')),
     ],
 
 ];

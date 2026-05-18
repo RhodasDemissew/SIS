@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\ApiToken;
 use App\Models\User;
 use App\Services\MoodleService;
+use App\Support\SisTenant;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -29,13 +30,24 @@ class AuthController extends Controller
         ]);
 
         $username = trim((string) $request->username);
+        $tenant = (string) $request->attributes->get('sis_tenant', SisTenant::defaultId());
+
+        try {
+            SisTenant::assertUsable($tenant);
+        } catch (\InvalidArgumentException $e) {
+            throw ValidationException::withMessages([
+                'tenant' => [$e->getMessage()],
+            ]);
+        }
 
         // Look up Moodle user by username so we can confirm userid and read profile fields.
         $moodleUsers = $this->moodle->getUsersByField('username', [$username]) ?? [];
         if (empty($moodleUsers) || ! is_array($moodleUsers[0] ?? null)) {
-            throw ValidationException::withMessages([
-                'username' => ['The provided credentials are incorrect.'],
-            ]);
+            $messages = ['username' => ['No Moodle user found for this username on the selected LMS site.']];
+            if (config('app.debug')) {
+                $messages['debug'] = ['step' => 'user_lookup', 'tenant' => $tenant];
+            }
+            throw ValidationException::withMessages($messages);
         }
 
         $moodleProfile = $moodleUsers[0];
@@ -50,9 +62,28 @@ class AuthController extends Controller
         $auth = $this->moodle->authenticateUser($username, $request->password);
         // Some Moodle versions return only {token, privatetoken}. Token presence means credentials are valid.
         if ($auth === null || ! isset($auth['token'])) {
-            throw ValidationException::withMessages([
-                'username' => ['The provided credentials are incorrect.'],
-            ]);
+            $moodleErr = $this->moodle->lastAuthError();
+            $hint = 'The provided credentials are incorrect.';
+            if (is_array($moodleErr)) {
+                $code = (string) ($moodleErr['errorcode'] ?? '');
+                if ($code === 'cannotcreatetoken') {
+                    $hint = 'Moodle blocked login for service "'.$this->moodleLoginServiceName().'". On this LMS, allow webservice/rest:use for your role, clear "Required capability" on the external service, or add your user to authorised users.';
+                } elseif ($code === 'invalidlogin') {
+                    $hint = 'Moodle rejected the password for this LMS site. Use the same password that works on the Ecamel Moodle website (not ETSS).';
+                } elseif ($code !== '') {
+                    $hint = 'Moodle login error: '.(string) ($moodleErr['error'] ?? $code);
+                }
+            }
+            $messages = ['username' => [$hint]];
+            if (config('app.debug') && is_array($moodleErr)) {
+                $messages['debug'] = [
+                    'step' => 'moodle_login',
+                    'tenant' => $tenant,
+                    'moodle' => $moodleErr,
+                    'login_service' => $this->moodleLoginServiceName(),
+                ];
+            }
+            throw ValidationException::withMessages($messages);
         }
         if (isset($auth['userid']) && (int) $auth['userid'] !== $moodleUserId) {
             throw ValidationException::withMessages([
@@ -72,7 +103,7 @@ class AuthController extends Controller
         $adminUsernamesLc = array_map('strtolower', $adminUsernames);
         $adminEmailsLc = array_map('strtolower', $adminEmails);
         $moodleRoleShortnames = Cache::remember(
-            "auth:moodle-user-role-shortnames:{$moodleUserId}",
+            "auth:moodle-user-role-shortnames:{$tenant}:{$moodleUserId}",
             now()->addMinutes(10),
             fn () => $this->moodle->getUserRoleShortnamesFromCourses($moodleUserId)
         );
@@ -112,10 +143,11 @@ class AuthController extends Controller
             ]
         );
 
-        $token = ApiToken::createTokenFor($user);
+        $token = ApiToken::createTokenFor($user, $tenant);
 
         return response()->json([
             'token' => $token,
+            'tenant' => $tenant,
             'user' => [
                 'id' => $user->id,
                 'name' => $user->name,
@@ -141,13 +173,27 @@ class AuthController extends Controller
     /**
      * Return current authenticated user (for frontend to check session).
      */
+    private function moodleLoginServiceName(): string
+    {
+        $tenant = (string) request()->attributes->get('sis_tenant', SisTenant::defaultId());
+
+        return (string) (SisTenant::config($tenant)['login_service'] ?? 'SIS');
+    }
+
     public function me(Request $request): JsonResponse
     {
         $user = $request->user();
         if (! $user) {
             return response()->json(['message' => 'Unauthenticated'], 401);
         }
+        $tenant = $request->attributes->get('sis_tenant');
+        if ($tenant === null && $request->bearerToken()) {
+            $apiToken = \App\Models\ApiToken::where('token', $request->bearerToken())->first();
+            $tenant = $apiToken?->tenant;
+        }
+
         return response()->json([
+            'tenant' => $tenant,
             'user' => [
                 'id' => $user->id,
                 'name' => $user->name,

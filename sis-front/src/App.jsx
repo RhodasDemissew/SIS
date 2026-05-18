@@ -96,6 +96,7 @@ const INITIAL_STUDENTS = [
 ];
 
 const SIS_TOKEN_KEY = 'sis_token';
+const SIS_TENANT_KEY = 'sis_tenant';
 const SIS_ACTIVE_ROLE_KEY = 'sis_active_role';
 const SIS_LAST_ACTIVITY_KEY = 'sis_last_activity_at';
 const SIS_IDLE_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 hours
@@ -111,14 +112,17 @@ function buildApiUrl(path) {
 
 function apiFetch(url, options = {}) {
   const token = typeof window !== 'undefined' ? window.localStorage.getItem(SIS_TOKEN_KEY) : null;
+  const tenant = typeof window !== 'undefined' ? window.localStorage.getItem(SIS_TENANT_KEY) : null;
   const activeRole = typeof window !== 'undefined' ? window.localStorage.getItem(SIS_ACTIVE_ROLE_KEY) : null;
   const headers = { ...options.headers };
   if (!headers['Accept'] && !headers['accept']) headers['Accept'] = 'application/json';
   if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (tenant) headers['X-SIS-Tenant'] = tenant;
   if (activeRole && SIS_ALLOWED_ROLES.includes(activeRole)) headers['X-SIS-ROLE'] = activeRole;
   return fetch(buildApiUrl(url), { ...options, headers }).then((res) => {
     if (res.status === 401 && typeof window !== 'undefined') {
       window.localStorage.removeItem(SIS_TOKEN_KEY);
+      window.localStorage.removeItem(SIS_TENANT_KEY);
       window.localStorage.removeItem(SIS_ACTIVE_ROLE_KEY);
       if (window.__sisOnUnauthorized) window.__sisOnUnauthorized();
     }
@@ -148,8 +152,25 @@ function InlineStateMessage({ type = 'info', children }) {
 const LandingLogin = ({ onLogin }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [tenant, setTenant] = useState(() =>
+    typeof window !== 'undefined' ? window.localStorage.getItem(SIS_TENANT_KEY) || 'ecamel' : 'ecamel'
+  );
+  const [tenants, setTenants] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  useEffect(() => {
+    fetch(buildApiUrl('/api/tenants'))
+      .then((r) => r.json())
+      .then((data) => {
+        const list = Array.isArray(data.tenants) ? data.tenants : [];
+        setTenants(list);
+        if (list.length > 0 && !list.some((t) => t.id === tenant)) {
+          setTenant(data.default_tenant || list[0].id);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -163,15 +184,24 @@ const LandingLogin = ({ onLogin }) => {
       const res = await fetch(buildApiUrl('/api/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({ username: username.trim(), password }),
+        body: JSON.stringify({ username: username.trim(), password, tenant }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(data.message || data.errors?.username?.[0] || 'Login failed.');
+        const detail =
+          data.errors?.username?.[0] ||
+          data.errors?.tenant?.[0] ||
+          data.message;
+        const debugNote =
+          data.errors?.debug?.moodle?.errorcode && typeof data.errors?.debug === 'object'
+            ? ` (${data.errors.debug.moodle.errorcode})`
+            : '';
+        setError(detail ? `${detail}${debugNote}` : 'Login failed.');
         return;
       }
       if (data.token && typeof window !== 'undefined') {
         window.localStorage.setItem(SIS_TOKEN_KEY, data.token);
+        window.localStorage.setItem(SIS_TENANT_KEY, data.tenant || tenant);
         onLogin();
       } else {
         setError('Invalid response from server.');
@@ -191,12 +221,30 @@ const LandingLogin = ({ onLogin }) => {
             <h1 className="text-3xl font-bold tracking-tight text-white">SIS</h1>
             <p className="text-indigo-200 text-sm mt-2 uppercase tracking-widest font-semibold">Student Information System</p>
             <p className="text-indigo-300/90 text-xs mt-3 max-w-xs mx-auto">
-              View grades and manage student information linked to DNEC EthioEducation LMS.
+              View grades and manage student information linked to your LMS.
             </p>
           </div>
           <form onSubmit={handleSubmit} autoComplete="off" className="p-8 pt-6 space-y-5">
             {error && (
               <p className="text-red-600 bg-red-50 border border-red-100 rounded-xl px-4 py-2 text-sm">{error}</p>
+            )}
+            {tenants.length > 1 && (
+              <div>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
+                  LMS site
+                </label>
+                <select
+                  value={tenant}
+                  onChange={(e) => setTenant(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                >
+                  {tenants.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             )}
             <div>
               <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Username</label>
@@ -261,6 +309,7 @@ const App = () => {
       apiFetch('/api/logout', { method: 'POST' }).catch(() => {});
     }
     if (typeof window !== 'undefined') window.localStorage.removeItem(SIS_TOKEN_KEY);
+    if (typeof window !== 'undefined') window.localStorage.removeItem(SIS_TENANT_KEY);
     if (typeof window !== 'undefined') window.localStorage.removeItem(SIS_ACTIVE_ROLE_KEY);
     if (typeof window !== 'undefined') window.localStorage.removeItem(SIS_LAST_ACTIVITY_KEY);
     setCurrentUser(null);
@@ -290,6 +339,9 @@ const App = () => {
         if (cancelled) return;
         const user = data.user || null;
         setCurrentUser(user);
+        if (data.tenant && typeof window !== 'undefined') {
+          window.localStorage.setItem(SIS_TENANT_KEY, data.tenant);
+        }
         const rolesRaw = Array.isArray(user?.roles) && user.roles.length ? user.roles : ['admin'];
         const roles = rolesRaw.filter((role) => SIS_ALLOWED_ROLES.includes(role));
         if (!roles.length) roles.push('student');
@@ -361,12 +413,12 @@ const App = () => {
     student: [
       { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
       { id: 'curriculum', label: 'Grades Explorer', icon: GraduationCap },
-      { id: 'moodle', label: 'DNEC EthioEducation LMS Sync', icon: LinkIcon },
+      { id: 'moodle', label: 'DNEC ETSS LMS Sync', icon: LinkIcon },
     ],
     admin: [
       { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
       { id: 'curriculum', label: 'Grades Explorer', icon: BookOpen },
-      { id: 'moodle', label: 'DNEC EthioEducation LMS Sync', icon: LinkIcon },
+      { id: 'moodle', label: 'DNEC ETSS LMS Sync', icon: LinkIcon },
     ]
   };
   const activeMenuLabel =
@@ -608,7 +660,7 @@ const Dashboard = ({ role }) => {
           if (cancelled) return;
           setMoodleOk(false);
           setError(
-            'Could not load live stats from DNEC EthioEducation LMS. Connection may be down.'
+            'Could not load live stats from DNEC ETSS LMS. Connection may be down.'
           );
         })
         .finally(() => {
@@ -718,7 +770,7 @@ const Dashboard = ({ role }) => {
                 if (!cancelled) {
                   setMoodleOk(false);
                   setError(
-                    'Could not refresh stats from DNEC EthioEducation LMS. Connection may be down.'
+                    'Could not refresh stats from DNEC ETSS LMS. Connection may be down.'
                   );
                 }
               } finally {
@@ -741,7 +793,7 @@ const Dashboard = ({ role }) => {
               <GraduationCap className="text-indigo-600" size={24} />
             </div>
           </div>
-          <h3 className="text-gray-500 text-sm font-medium">Total grade levels (DNEC EthioEducation LMS)</h3>
+          <h3 className="text-gray-500 text-sm font-medium">Total grade levels (DNEC ETSS LMS)</h3>
           <p className="text-2xl font-bold text-gray-900 mt-1">
             {gradeLevels !== null ? gradeLevels : '—'}
           </p>
@@ -753,7 +805,7 @@ const Dashboard = ({ role }) => {
               <BookOpen className="text-blue-600" size={24} />
             </div>
           </div>
-          <h3 className="text-gray-500 text-sm font-medium">Total courses (from DNEC EthioEducation LMS)</h3>
+          <h3 className="text-gray-500 text-sm font-medium">Total courses (from DNEC ETSS LMS)</h3>
           <p className="text-2xl font-bold text-gray-900 mt-1">
             {totalCourses !== null ? totalCourses : '—'}
           </p>
@@ -766,7 +818,7 @@ const Dashboard = ({ role }) => {
               <Users className="text-emerald-600" size={24} />
             </div>
           </div>
-          <h3 className="text-gray-500 text-sm font-medium">Students in DNEC EthioEducation LMS</h3>
+          <h3 className="text-gray-500 text-sm font-medium">Students in DNEC ETSS LMS</h3>
           <p className="text-2xl font-bold text-gray-900 mt-1">
             {totalMoodleStudents !== null ? totalMoodleStudents : '—'}
           </p>
@@ -781,7 +833,7 @@ const Dashboard = ({ role }) => {
               <FileText className="text-amber-600" size={24} />
             </div>
           </div>
-          <h3 className="text-gray-500 text-sm font-medium">Last grade fetch (DNEC EthioEducation LMS)</h3>
+          <h3 className="text-gray-500 text-sm font-medium">Last grade fetch (DNEC ETSS LMS)</h3>
           <p className="text-sm font-semibold text-gray-900 mt-1">
             {formattedLastFetch || 'No grade fetch recorded yet'}
           </p>
@@ -799,14 +851,14 @@ const Dashboard = ({ role }) => {
                 moodleOk === null ? 'bg-gray-300' : moodleOk ? 'bg-green-500' : 'bg-red-500'
               }`}
             />
-            <h3 className="text-sm font-semibold text-gray-900">Connection to DNEC EthioEducation LMS</h3>
+            <h3 className="text-sm font-semibold text-gray-900">Connection to DNEC ETSS LMS</h3>
           </div>
         </div>
         <p className="text-sm text-gray-600">
           {moodleOk === null && 'Checking…'}
-          {moodleOk === true && 'OK – DNEC EthioEducation LMS categories endpoint is responding.'}
+          {moodleOk === true && 'OK – DNEC ETSS LMS categories endpoint is responding.'}
           {moodleOk === false &&
-            'Error – SIS could not reach DNEC EthioEducation LMS via the categories API. Check token, URL, or network.'}
+            'Error – SIS could not reach DNEC ETSS LMS via the categories API. Check token, URL, or network.'}
         </p>
       </div>
 
@@ -1054,7 +1106,7 @@ const StudentProfileModal = ({ student, onClose }) => {
             <div className="bg-indigo-50 rounded-2xl p-4 flex items-start space-x-3 border border-indigo-100/50">
               <Info size={18} className="text-indigo-600 mt-0.5 shrink-0" />
               <p className="text-[11px] text-indigo-700/70 leading-relaxed font-medium">
-                This student is synchronized with the <strong>DNEC EthioEducation LMS</strong> via API. Changes to level or status are reflected in the learning portal immediately.
+                This student is synchronized with the <strong>DNEC ETSS LMS</strong> via API. Changes to level or status are reflected in the learning portal immediately.
               </p>
             </div>
           </div>
@@ -1335,7 +1387,7 @@ const CurriculumModule = () => {
       <div className="flex justify-between items-center">
         <div>
           <h3 className="text-xl font-bold text-gray-900">Grades Explorer</h3>
-          <p className="text-sm text-gray-500">Grade level → Course → Students &amp; DNEC EthioEducation LMS grades</p>
+          <p className="text-sm text-gray-500">Grade level → Course → Students &amp; DNEC ETSS LMS grades</p>
         </div>
         <button
           onClick={toggleCompare}
@@ -1467,7 +1519,7 @@ const CurriculumModule = () => {
           ) : studentError ? (
             <InlineStateMessage type="error">{studentError}</InlineStateMessage>
           ) : courseStudents.length === 0 ? (
-            <InlineStateMessage>No enrolled students found for this course (according to DNEC EthioEducation LMS).</InlineStateMessage>
+            <InlineStateMessage>No enrolled students found for this course (according to DNEC ETSS LMS).</InlineStateMessage>
           ) : (
             <div className="space-y-3">
               <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-gray-400 border-b pb-2">
@@ -1560,7 +1612,7 @@ const CurriculumModule = () => {
             </div>
           )}
           <p className="mt-3 text-xs text-gray-400">
-            This list is loaded directly from DNEC EthioEducation LMS enrolments.
+            This list is loaded directly from DNEC ETSS LMS enrolments.
             {studentsFetchedAt ? ` Last updated: ${new Date(studentsFetchedAt).toLocaleString()}.` : ''}
           </p>
         </div>
@@ -2139,7 +2191,7 @@ const FacultyRoster = ({ students }) => {
         <h3 className="text-lg font-bold">Class List: Grade 5 Mathematics</h3>
         <button className="text-indigo-600 flex items-center space-x-1 text-sm font-bold hover:bg-indigo-50 px-3 py-1.5 rounded-lg transition-colors">
           <LinkIcon size={14} />
-          <span>Launch DNEC EthioEducation LMS Classroom</span>
+          <span>Launch DNEC ETSS LMS Classroom</span>
         </button>
       </div>
       <table className="w-full text-left">
@@ -2239,7 +2291,7 @@ const StudentDashboard = ({ moodleUserId, studentName }) => {
         <h3 className="text-xl font-black uppercase tracking-tight">My Dashboard</h3>
         <p className="text-indigo-100 text-base mt-2">
           Hi, <span className="font-bold">{studentName || 'Student'}</span>. Here is your personal
-          performance snapshot from DNEC EthioEducation LMS.
+          performance snapshot from DNEC ETSS LMS.
         </p>
         <p className="text-indigo-200 text-sm mt-1">Keep going - your progress is updated from your LMS grades.</p>
         {loading && <p className="text-indigo-200 text-xs mt-2">Refreshing latest grades...</p>}
@@ -2645,7 +2697,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
     return () => { cancelled = true; };
   }, [isStudentScoped, lockedMoodleUserId]);
 
-  // Clear grades when switching student; only show grades after "Fetch grades from DNEC EthioEducation LMS" is used.
+  // Clear grades when switching student; only show grades after "Fetch grades from DNEC ETSS LMS" is used.
   useEffect(() => {
     setGrades([]);
     setMessage(null);
@@ -2660,7 +2712,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
       .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
       .then(({ ok, data }) => {
         if (ok) {
-          setMessage(data.message || 'Grades fetched from DNEC EthioEducation LMS.');
+          setMessage(data.message || 'Grades fetched from DNEC ETSS LMS.');
           setGrades(data.grades || []);
           if (typeof window !== 'undefined') {
             try {
@@ -2670,7 +2722,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
             }
           }
         } else {
-          setError(data.message || 'Failed to fetch grades from DNEC EthioEducation LMS.');
+          setError(data.message || 'Failed to fetch grades from DNEC ETSS LMS.');
         }
       })
       .catch(() => setError('Request failed. Please try again.'))
@@ -2741,11 +2793,11 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
           <LinkIcon size={32} className="text-indigo-300" />
         </div>
         <div>
-          <h3 className="text-xl font-black uppercase tracking-tight text-white">DNEC EthioEducation LMS Sync Hub</h3>
+          <h3 className="text-xl font-black uppercase tracking-tight text-white">DNEC ETSS LMS Sync Hub</h3>
           <p className="text-indigo-200 text-sm mt-1 max-w-md">
             {isStudentScoped
               ? 'Quick sync view for your account. Use Grades Explorer for structured level -> course -> grade navigation.'
-              : 'Fetch grades from DNEC EthioEducation LMS for a student. Select a student, then click "Fetch grades from DNEC EthioEducation LMS".'}
+              : 'Fetch grades from DNEC ETSS LMS for a student. Select a student, then click "Fetch grades from DNEC ETSS LMS".'}
           </p>
         </div>
       </div>
@@ -2825,7 +2877,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
                 disabled={!selectedStudentId || fetching}
                 className="w-full px-4 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
               >
-                {fetching ? 'Fetching…' : isStudentScoped ? 'Load my grades' : 'Fetch grades from DNEC EthioEducation LMS'}
+                {fetching ? 'Fetching…' : isStudentScoped ? 'Load my grades' : 'Fetch grades from DNEC ETSS LMS'}
               </button>
             </div>
           )}
@@ -2835,7 +2887,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
           <div className="flex items-center justify-between mb-4">
             <h4 className="font-bold flex items-center text-gray-800">
               <CheckCircle className="text-green-500 mr-2" size={18} />
-              Grades (from DNEC EthioEducation LMS)
+              Grades (from DNEC ETSS LMS)
             </h4>
             <button
               type="button"
@@ -2860,7 +2912,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
           </div>
           {grades.length === 0 ? (
             <p className="text-gray-500 text-sm">
-              Select a student and click &quot;Fetch grades from DNEC EthioEducation LMS&quot; to
+              Select a student and click &quot;Fetch grades from DNEC ETSS LMS&quot; to
               see grades here.
             </p>
           ) : (

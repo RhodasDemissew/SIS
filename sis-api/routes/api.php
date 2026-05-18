@@ -3,13 +3,17 @@
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\MoodleController;
 use App\Http\Controllers\Api\StudentController;
+use App\Http\Controllers\Api\TenantController;
 use Illuminate\Support\Facades\Route;
 
-// Public auth
-Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
+Route::get('/tenants', [TenantController::class, 'index']);
 
-// Protected routes (require Bearer token)
-Route::middleware(['auth.api', 'throttle:60,1'])->group(function (): void {
+Route::middleware(['sis.tenant', 'throttle:10,1'])->group(function (): void {
+    Route::post('/login', [AuthController::class, 'login']);
+});
+
+// Protected routes (require Bearer token + tenant)
+Route::middleware(['sis.tenant', 'auth.api', 'throttle:60,1'])->group(function (): void {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);
 
