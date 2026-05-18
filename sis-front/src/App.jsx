@@ -200,6 +200,145 @@ function applyOverviewMetrics(metrics, setters) {
   setMoodleOk(true);
 }
 
+/** Sort grade/level labels naturally (GRADE 1, 2, … 10, not 1, 10, 11, 2). */
+function compareGradeLevelNames(a, b) {
+  const nameA = String(typeof a === 'string' ? a : a?.name ?? '').trim();
+  const nameB = String(typeof b === 'string' ? b : b?.name ?? '').trim();
+  return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+}
+
+function sortGradeLevelCategories(categories) {
+  return [...categories].sort(compareGradeLevelNames);
+}
+
+function easeOutCubic(t) {
+  return 1 - (1 - t) ** 3;
+}
+
+/** Animate a number from 0 → target when enabled / value changes. */
+function useCountUp(value, { duration = 900, delay = 0, enabled = true } = {}) {
+  const target =
+    value == null || Number.isNaN(Number(value)) ? null : Math.max(0, Math.round(Number(value)));
+  const [display, setDisplay] = useState(0);
+
+  useEffect(() => {
+    if (!enabled || target === null) {
+      setDisplay(0);
+      return undefined;
+    }
+
+    let raf = 0;
+    let timeoutId = 0;
+
+    const startAnimation = () => {
+      const startAt = performance.now();
+      const tick = (now) => {
+        const t = Math.min(1, (now - startAt) / duration);
+        setDisplay(Math.round(target * easeOutCubic(t)));
+        if (t < 1) raf = requestAnimationFrame(tick);
+      };
+      raf = requestAnimationFrame(tick);
+    };
+
+    if (delay > 0) timeoutId = window.setTimeout(startAnimation, delay);
+    else startAnimation();
+
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(timeoutId);
+    };
+  }, [target, duration, delay, enabled]);
+
+  return target === null ? null : display;
+}
+
+function AnimatedStatNumber({ value, className, duration = 900, delay = 0 }) {
+  const animated = useCountUp(value, { duration, delay, enabled: value != null });
+  return (
+    <p className={className}>{animated === null ? '—' : animated.toLocaleString()}</p>
+  );
+}
+
+function StudentsPerGradeChart({ studentsByGrade }) {
+  const entries = React.useMemo(
+    () => Object.entries(studentsByGrade).sort((a, b) => Number(b[1]) - Number(a[1])),
+    [studentsByGrade]
+  );
+  const max = React.useMemo(
+    () => entries.reduce((m, [, v]) => Math.max(m, Number(v) || 0), 0) || 1,
+    [entries]
+  );
+  const [barsLive, setBarsLive] = useState(false);
+  const dataKey = React.useMemo(
+    () => entries.map(([grade, count]) => `${grade}:${count}`).join('|'),
+    [entries]
+  );
+
+  useEffect(() => {
+    setBarsLive(false);
+    if (entries.length === 0) return undefined;
+    let inner = 0;
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => setBarsLive(true));
+    });
+    return () => {
+      cancelAnimationFrame(outer);
+      if (inner) cancelAnimationFrame(inner);
+    };
+  }, [dataKey, entries.length]);
+
+  if (entries.length === 0) return null;
+
+  return (
+    <div className="space-y-2.5 dashboard-stat-enter" style={{ animationDelay: '120ms' }}>
+      {entries.map(([grade, count], index) => {
+        const targetWidth = Math.max(6, (Number(count) / max) * 100);
+        const width = barsLive ? targetWidth : 0;
+        const delayMs = index * 75;
+        return (
+          <GradeBarRow
+            key={grade}
+            grade={grade}
+            count={Number(count) || 0}
+            width={width}
+            delayMs={delayMs}
+            animate={barsLive}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function GradeBarRow({ grade, count, width, delayMs, animate }) {
+  const displayCount = useCountUp(animate ? count : 0, {
+    duration: 750,
+    delay: delayMs,
+    enabled: animate,
+  });
+
+  return (
+    <div
+      className="flex items-center gap-3 text-xs px-2 py-1.5 rounded-xl hover:bg-indigo-50/60 transition-colors dashboard-stat-enter"
+      style={{ animationDelay: `${delayMs}ms` }}
+    >
+      <div className="w-32 truncate text-gray-600 font-semibold">{grade}</div>
+      <div className="flex-1 h-3.5 rounded-full bg-gray-100 overflow-hidden">
+        <div
+          className="h-3.5 rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 transition-[width] duration-700 ease-out"
+          style={{
+            width: `${width}%`,
+            transitionDelay: `${delayMs}ms`,
+          }}
+        />
+      </div>
+      <div className="w-10 text-right text-gray-800 font-semibold tabular-nums">
+        {displayCount.toLocaleString()}
+      </div>
+    </div>
+  );
+}
+
 function applyAuthFromPayload(data, { setCurrentUser, setLmsName, setUserRole }) {
   const user = data?.user || null;
   if (!user) return;
@@ -887,47 +1026,68 @@ const Dashboard = ({ role, lmsName }) => {
       {error && <InlineStateMessage type="error">{error}</InlineStateMessage>}
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+        <div
+          className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 dashboard-stat-enter"
+          style={{ animationDelay: '0ms' }}
+        >
           <div className="flex items-center justify-between mb-3">
             <div className="p-3 rounded-xl bg-indigo-50">
               <GraduationCap className="text-indigo-600" size={24} />
             </div>
           </div>
           <h3 className="text-gray-500 text-sm font-medium">Total grade levels</h3>
-          <p className="text-2xl font-bold text-gray-900 mt-1">
-            {gradeLevels !== null ? gradeLevels : '—'}
-          </p>
+          <AnimatedStatNumber
+            value={gradeLevels}
+            className="text-2xl font-bold text-gray-900 mt-1 tabular-nums"
+            duration={850}
+            delay={80}
+          />
         </div>
 
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+        <div
+          className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 dashboard-stat-enter"
+          style={{ animationDelay: '80ms' }}
+        >
           <div className="flex items-center justify-between mb-3">
             <div className="p-3 rounded-xl bg-blue-50">
               <BookOpen className="text-blue-600" size={24} />
             </div>
           </div>
           <h3 className="text-gray-500 text-sm font-medium">Total courses</h3>
-          <p className="text-2xl font-bold text-gray-900 mt-1">
-            {totalCourses !== null ? totalCourses : '—'}
-          </p>
+          <AnimatedStatNumber
+            value={totalCourses}
+            className="text-2xl font-bold text-gray-900 mt-1 tabular-nums"
+            duration={850}
+            delay={160}
+          />
           <p className="text-[11px] text-gray-400 mt-1">Across all grade levels.</p>
         </div>
 
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+        <div
+          className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 dashboard-stat-enter"
+          style={{ animationDelay: '160ms' }}
+        >
           <div className="flex items-center justify-between mb-3">
             <div className="p-3 rounded-xl bg-emerald-50">
               <Users className="text-emerald-600" size={24} />
             </div>
           </div>
           <h3 className="text-gray-500 text-sm font-medium">Enrolled students</h3>
-          <p className="text-2xl font-bold text-gray-900 mt-1">
-            {totalMoodleStudents !== null ? totalMoodleStudents : '—'}
-          </p>
+          <AnimatedStatNumber
+            value={totalMoodleStudents}
+            className="text-2xl font-bold text-gray-900 mt-1 tabular-nums"
+            duration={900}
+            delay={240}
+          />
           <p className="text-[11px] text-gray-400 mt-1">
             Unique students enrolled across all courses.
           </p>
         </div>
 
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+        <div
+          className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 dashboard-stat-enter"
+          style={{ animationDelay: '240ms' }}
+        >
           <div className="flex items-center justify-between mb-3">
             <div className="p-3 rounded-xl bg-amber-50">
               <FileText className="text-amber-600" size={24} />
@@ -962,46 +1122,14 @@ const Dashboard = ({ role, lmsName }) => {
       </div>
 
       {Object.keys(studentsByGrade).length > 0 && (
-        <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-          <h3 className="text-sm font-semibold text-gray-900 mb-4">
-            Students per grade level
-          </h3>
-          {(() => {
-            const entries = Object.entries(studentsByGrade).sort(
-              (a, b) => Number(b[1]) - Number(a[1])
-            );
-            const max =
-              entries.reduce((m, [, v]) => {
-                const num = Number(v) || 0;
-                return num > m ? num : m;
-              }, 0) || 1;
-            return (
-              <div className="space-y-2">
-                {entries.map(([grade, count]) => {
-                  const targetWidth = Math.max(6, (Number(count) / max) * 100);
-                  const width = chartReady ? targetWidth : 0;
-                  return (
-                    <div
-                      key={grade}
-                      className="flex items-center gap-3 text-xs px-2 py-1 rounded-xl hover:bg-indigo-50/60 transition-colors"
-                    >
-                      <div className="w-32 truncate text-gray-600 font-semibold">{grade}</div>
-                      <div className="flex-1 h-3 rounded-full bg-gray-100 overflow-hidden">
-                        <div
-                          className="h-3 rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 transition-all duration-700 ease-out"
-                          style={{ width: `${width}%` }}
-                        />
-                      </div>
-                      <div className="w-8 text-right text-gray-800 font-semibold">{count}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })()}
+        <div
+          className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 dashboard-stat-enter"
+          style={{ animationDelay: '320ms' }}
+        >
+          <h3 className="text-sm font-semibold text-gray-900 mb-4">Students per grade level</h3>
+          <StudentsPerGradeChart studentsByGrade={studentsByGrade} />
         </div>
-      )}
-    </div>
+      )}    </div>
   );
 };
 
@@ -1265,9 +1393,7 @@ const CurriculumModule = () => {
       .then((data) => {
         if (!alive) return;
         const cats = Array.isArray(data.categories) ? data.categories : [];
-        // Prefer grade-like categories first.
-        const sorted = [...cats].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
-        setCategories(sorted);
+        setCategories(sortGradeLevelCategories(cats));
       })
       .catch((res) =>
         alive &&
@@ -2507,7 +2633,7 @@ const StudentCurriculumExplorer = ({ moodleUserId, studentName }) => {
       .then((categoriesData) => {
         if (cancelled) return;
         const nextCategories = Array.isArray(categoriesData?.categories) ? categoriesData.categories : [];
-        setCategories(nextCategories.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))));
+        setCategories(sortGradeLevelCategories(nextCategories));
       })
       .catch((res) => {
         if (cancelled) return;
