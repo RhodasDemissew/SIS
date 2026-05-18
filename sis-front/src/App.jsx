@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useContext } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Routes, Route, Navigate, useLocation, NavLink } from 'react-router-dom';
 import { 
   Users, 
@@ -25,6 +25,7 @@ import {
   Calendar,
   Download
 } from 'lucide-react';
+import { MSG, messageForHttpStatus, loginMessageForStatus } from './userMessages';
 
 /** Build and download a CSV file. rows: array of arrays (first = header) or array of objects. */
 function downloadCsv(filename, rows) {
@@ -101,25 +102,6 @@ const SIS_ACTIVE_ROLE_KEY = 'sis_active_role';
 const SIS_LAST_ACTIVITY_KEY = 'sis_last_activity_at';
 const SIS_IDLE_TIMEOUT_MS = 6 * 60 * 60 * 1000; // 6 hours
 const SIS_ALLOWED_ROLES = ['admin', 'student'];
-const LMS_NAME_FALLBACK = {
-  ecamel: 'DNEC ECAMEL LMS',
-  etss: 'DNEC ETSS LMS',
-};
-
-function resolveLmsName(tenantId, tenantLabel) {
-  if (tenantLabel && String(tenantLabel).trim()) {
-    return String(tenantLabel).trim();
-  }
-  const id = String(tenantId || 'ecamel').toLowerCase();
-  return LMS_NAME_FALLBACK[id] || 'LMS';
-}
-
-const LmsNameContext = React.createContext(resolveLmsName('ecamel', null));
-
-function useLmsName() {
-  return useContext(LmsNameContext);
-}
-
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
 
 function buildApiUrl(path) {
@@ -150,12 +132,6 @@ function apiFetch(url, options = {}) {
     }
     return res;
   });
-}
-
-function friendlyStatusMessage(status, fallback) {
-  if (status === 401) return 'Your session expired. Please sign in again.';
-  if (status === 403) return 'Access denied for your current role.';
-  return fallback;
 }
 
 function InlineStateMessage({ type = 'info', children }) {
@@ -195,7 +171,7 @@ const LandingLogin = ({ onLogin }) => {
     e.preventDefault();
     setError(null);
     if (!username.trim() || !password) {
-      setError('Please enter username and password.');
+      setError(MSG.AUTH_MISSING_FIELDS);
       return;
     }
     setLoading(true);
@@ -207,15 +183,7 @@ const LandingLogin = ({ onLogin }) => {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const detail =
-          data.errors?.username?.[0] ||
-          data.errors?.tenant?.[0] ||
-          data.message;
-        const debugNote =
-          data.errors?.debug?.moodle?.errorcode && typeof data.errors?.debug === 'object'
-            ? ` (${data.errors.debug.moodle.errorcode})`
-            : '';
-        setError(detail ? `${detail}${debugNote}` : 'Login failed.');
+        setError(loginMessageForStatus(res.status));
         return;
       }
       if (data.token && typeof window !== 'undefined') {
@@ -223,10 +191,10 @@ const LandingLogin = ({ onLogin }) => {
         window.localStorage.setItem(SIS_TENANT_KEY, data.tenant || tenant);
         onLogin();
       } else {
-        setError('Invalid response from server.');
+        setError(MSG.AUTH_UNEXPECTED);
       }
-    } catch (err) {
-      setError(err.message || 'Unable to sign in right now. Please try again.');
+    } catch {
+      setError(MSG.AUTH_UNAVAILABLE);
     } finally {
       setLoading(false);
     }
@@ -240,7 +208,7 @@ const LandingLogin = ({ onLogin }) => {
             <h1 className="text-3xl font-bold tracking-tight text-white">SIS</h1>
             <p className="text-indigo-200 text-sm mt-2 uppercase tracking-widest font-semibold">Student Information System</p>
             <p className="text-indigo-300/90 text-xs mt-3 max-w-xs mx-auto">
-              View grades and manage student information linked to your LMS.
+              View grades and manage student information in one place.
             </p>
           </div>
           <form onSubmit={handleSubmit} autoComplete="off" className="p-8 pt-6 space-y-5">
@@ -310,12 +278,6 @@ const App = () => {
     if (typeof window === 'undefined') return 'admin';
     return window.localStorage.getItem(SIS_ACTIVE_ROLE_KEY) || 'admin';
   });
-  const [lmsName, setLmsName] = useState(() =>
-    resolveLmsName(
-      typeof window !== 'undefined' ? window.localStorage.getItem(SIS_TENANT_KEY) : 'ecamel',
-      null
-    )
-  );
   const pathname = (location.pathname || '/').replace(/^\//, '') || 'dashboard';
   const activeTab = pathname;
   const [students, setStudents] = useState(INITIAL_STUDENTS);
@@ -346,7 +308,7 @@ const App = () => {
     window.__sisOnForbidden = () => {
       setGlobalNotice({
         type: 'warning',
-        message: 'Access denied for this action with your current role.',
+        message: MSG.PERMISSION_DENIED,
       });
     };
     return () => {
@@ -367,7 +329,6 @@ const App = () => {
         if (data.tenant && typeof window !== 'undefined') {
           window.localStorage.setItem(SIS_TENANT_KEY, data.tenant);
         }
-        setLmsName(resolveLmsName(data.tenant, data.tenant_label));
         const rolesRaw = Array.isArray(user?.roles) && user.roles.length ? user.roles : ['admin'];
         const roles = rolesRaw.filter((role) => SIS_ALLOWED_ROLES.includes(role));
         if (!roles.length) roles.push('student');
@@ -442,15 +403,15 @@ const App = () => {
       student: [
         { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
         { id: 'curriculum', label: 'Grades Explorer', icon: GraduationCap },
-        { id: 'moodle', label: `${lmsName} Sync`, icon: LinkIcon },
+        { id: 'moodle', label: 'Grade sync', icon: LinkIcon },
       ],
       admin: [
         { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
         { id: 'curriculum', label: 'Grades Explorer', icon: BookOpen },
-        { id: 'moodle', label: `${lmsName} Sync`, icon: LinkIcon },
+        { id: 'moodle', label: 'Grade sync', icon: LinkIcon },
       ],
     }),
-    [lmsName]
+    []
   );
   const activeMenuLabel =
     menuItems[userRole]?.find((item) => item.id === activeTab)?.label ||
@@ -523,7 +484,6 @@ const App = () => {
   }
 
   return (
-    <LmsNameContext.Provider value={lmsName}>
     <div className="min-h-screen bg-gray-50 flex text-slate-900 font-sans">
       {/* Sidebar */}
       <div className="w-64 bg-indigo-950 text-white flex flex-col shrink-0">
@@ -627,14 +587,12 @@ const App = () => {
       </div>
 
     </div>
-    </LmsNameContext.Provider>
   );
 };
 
 // --- SUB-COMPONENTS ---
 
 const Dashboard = ({ role }) => {
-  const lmsName = useLmsName();
   const [loading, setLoading] = useState(role === 'admin');
   const [error, setError] = useState(null);
   const [gradeLevels, setGradeLevels] = useState(null);
@@ -693,9 +651,7 @@ const Dashboard = ({ role }) => {
         .catch(() => {
           if (cancelled) return;
           setMoodleOk(false);
-          setError(
-            `Could not load live stats from ${lmsName}. Connection may be down.`
-          );
+          setError(MSG.LOAD_DASHBOARD);
         })
         .finally(() => {
           if (!cancelled) setLoading(false);
@@ -803,9 +759,7 @@ const Dashboard = ({ role }) => {
               } catch {
                 if (!cancelled) {
                   setMoodleOk(false);
-                  setError(
-                    `Could not refresh stats from ${lmsName}. Connection may be down.`
-                  );
+                  setError(MSG.LOAD_DASHBOARD_REFRESH);
                 }
               } finally {
                 if (!cancelled) setLoading(false);
@@ -827,7 +781,7 @@ const Dashboard = ({ role }) => {
               <GraduationCap className="text-indigo-600" size={24} />
             </div>
           </div>
-          <h3 className="text-gray-500 text-sm font-medium">Total grade levels ({lmsName})</h3>
+          <h3 className="text-gray-500 text-sm font-medium">Total grade levels</h3>
           <p className="text-2xl font-bold text-gray-900 mt-1">
             {gradeLevels !== null ? gradeLevels : '—'}
           </p>
@@ -839,11 +793,11 @@ const Dashboard = ({ role }) => {
               <BookOpen className="text-blue-600" size={24} />
             </div>
           </div>
-          <h3 className="text-gray-500 text-sm font-medium">Total courses (from {lmsName})</h3>
+          <h3 className="text-gray-500 text-sm font-medium">Total courses</h3>
           <p className="text-2xl font-bold text-gray-900 mt-1">
             {totalCourses !== null ? totalCourses : '—'}
           </p>
-          <p className="text-[11px] text-gray-400 mt-1">Across all Moodle categories.</p>
+          <p className="text-[11px] text-gray-400 mt-1">Across all grade levels.</p>
         </div>
 
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
@@ -852,12 +806,12 @@ const Dashboard = ({ role }) => {
               <Users className="text-emerald-600" size={24} />
             </div>
           </div>
-          <h3 className="text-gray-500 text-sm font-medium">Students in {lmsName}</h3>
+          <h3 className="text-gray-500 text-sm font-medium">Enrolled students</h3>
           <p className="text-2xl font-bold text-gray-900 mt-1">
             {totalMoodleStudents !== null ? totalMoodleStudents : '—'}
           </p>
           <p className="text-[11px] text-gray-400 mt-1">
-            Unique enrolled users across all LMS courses.
+            Unique students enrolled across all courses.
           </p>
         </div>
 
@@ -867,12 +821,12 @@ const Dashboard = ({ role }) => {
               <FileText className="text-amber-600" size={24} />
             </div>
           </div>
-          <h3 className="text-gray-500 text-sm font-medium">Last grade fetch ({lmsName})</h3>
+          <h3 className="text-gray-500 text-sm font-medium">Last grade update</h3>
           <p className="text-sm font-semibold text-gray-900 mt-1">
-            {formattedLastFetch || 'No grade fetch recorded yet'}
+            {formattedLastFetch || 'No grade update recorded yet'}
           </p>
           <p className="text-[11px] text-gray-400 mt-1">
-            Updated whenever grades are fetched in the Moodle Sync screen.
+            Updated whenever grades are refreshed in Grade sync.
           </p>
         </div>
       </div>
@@ -885,21 +839,20 @@ const Dashboard = ({ role }) => {
                 moodleOk === null ? 'bg-gray-300' : moodleOk ? 'bg-green-500' : 'bg-red-500'
               }`}
             />
-            <h3 className="text-sm font-semibold text-gray-900">Connection to {lmsName}</h3>
+            <h3 className="text-sm font-semibold text-gray-900">Connection status</h3>
           </div>
         </div>
         <p className="text-sm text-gray-600">
-          {moodleOk === null && 'Checking…'}
-          {moodleOk === true && `OK – ${lmsName} categories endpoint is responding.`}
-          {moodleOk === false &&
-            `Error – SIS could not reach ${lmsName} via the categories API. Check token, URL, or network.`}
+          {moodleOk === null && MSG.CONNECTION_CHECKING}
+          {moodleOk === true && MSG.CONNECTION_OK}
+          {moodleOk === false && MSG.CONNECTION_UNAVAILABLE}
         </p>
       </div>
 
       {Object.keys(studentsByGrade).length > 0 && (
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
           <h3 className="text-sm font-semibold text-gray-900 mb-4">
-            Students per grade level (SIS)
+            Students per grade level
           </h3>
           {(() => {
             const entries = Object.entries(studentsByGrade).sort(
@@ -1059,7 +1012,6 @@ const AdmissionsModule = ({ students, loading, onOpenModal, onViewRecord, onDele
 };
 
 const StudentProfileModal = ({ student, onClose }) => {
-  const lmsName = useLmsName();
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-indigo-950/40 backdrop-blur-sm p-4">
       <div className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
@@ -1141,7 +1093,7 @@ const StudentProfileModal = ({ student, onClose }) => {
             <div className="bg-indigo-50 rounded-2xl p-4 flex items-start space-x-3 border border-indigo-100/50">
               <Info size={18} className="text-indigo-600 mt-0.5 shrink-0" />
               <p className="text-[11px] text-indigo-700/70 leading-relaxed font-medium">
-                This student is synchronized with the <strong>{lmsName}</strong> via API. Changes to level or status are reflected in the learning portal immediately.
+                Profile changes to level or status are saved and reflected in your learning portal shortly.
               </p>
             </div>
           </div>
@@ -1166,7 +1118,6 @@ const StudentProfileModal = ({ student, onClose }) => {
 };
 
 const CurriculumModule = () => {
-  const lmsName = useLmsName();
   const [loadingCats, setLoadingCats] = useState(false);
   const [catError, setCatError] = useState(null);
   const [categories, setCategories] = useState([]);
@@ -1206,12 +1157,12 @@ const CurriculumModule = () => {
         const sorted = [...cats].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
         setCategories(sorted);
       })
-      .catch((res) => alive && setCatError(
-        friendlyStatusMessage(
-          res?.status,
-          'Could not load grade categories right now. Please try again.'
+      .catch((res) =>
+        alive &&
+        setCatError(
+          res?.status ? messageForHttpStatus(res.status) : MSG.LOAD_CATEGORIES
         )
-      ))
+      )
       .finally(() => alive && setLoadingCats(false));
     return () => { alive = false; };
   }, []);
@@ -1235,9 +1186,12 @@ const CurriculumModule = () => {
         const list = Array.isArray(data.courses) ? data.courses : [];
         setMoodleCourses(list);
       })
-      .catch((res) => alive && setCourseError(
-        friendlyStatusMessage(res?.status, 'Could not load courses for this grade/level.')
-      ))
+      .catch((res) =>
+        alive &&
+        setCourseError(
+          res?.status ? messageForHttpStatus(res.status) : MSG.LOAD_COURSES_GRADE
+        )
+      )
       .finally(() => alive && setLoadingCourses(false));
     return () => { alive = false; };
   }, [selectedCategoryId]);
@@ -1260,12 +1214,15 @@ const CurriculumModule = () => {
       const res = await apiFetch(url);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.message || friendlyStatusMessage(res.status, 'Could not load course students'));
+        setStudentError(
+          res.status ? messageForHttpStatus(res.status) : MSG.LOAD_COURSE_STUDENTS
+        );
+        return;
       }
       setCourseStudents(Array.isArray(data.students) ? data.students : []);
       setStudentsFetchedAt(data.fetched_at || null);
-    } catch (e) {
-      setStudentError(e.message || 'Could not load course students');
+    } catch {
+      setStudentError(MSG.LOAD_COURSE_STUDENTS);
     } finally {
       setLoadingStudents(false);
     }
@@ -1290,9 +1247,14 @@ const CurriculumModule = () => {
       .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
       .then(({ ok, data }) => {
         if (ok) setDetailItems(data.items || []);
-        else setDetailError(data.message || 'Could not load detailed grades.');
+        else
+          setDetailError(MSG.LOAD_DETAILED_GRADES);
       })
-      .catch((res) => setDetailError(friendlyStatusMessage(res?.status, 'Request failed. Please try again.')))
+      .catch((res) =>
+        setDetailError(
+          res?.status ? messageForHttpStatus(res.status) : MSG.LOAD_DETAILED_GRADES
+        )
+      )
       .finally(() => setDetailLoading(false));
   };
 
@@ -1423,7 +1385,7 @@ const CurriculumModule = () => {
       <div className="flex justify-between items-center">
         <div>
           <h3 className="text-xl font-bold text-gray-900">Grades Explorer</h3>
-          <p className="text-sm text-gray-500">Grade level → Course → Students &amp; {lmsName} grades</p>
+          <p className="text-sm text-gray-500">Grade level → Course → Students &amp; grades</p>
         </div>
         <button
           onClick={toggleCompare}
@@ -1465,7 +1427,7 @@ const CurriculumModule = () => {
             {loadingCourses && <span className="text-xs text-gray-400">Loading…</span>}
           </div>
           {!selectedCategoryId ? (
-            <InlineStateMessage>Pick a Grade/Level first.</InlineStateMessage>
+            <InlineStateMessage>{MSG.VALIDATION_PICK_GRADE}</InlineStateMessage>
           ) : courseError ? (
             <InlineStateMessage type="error">{courseError}</InlineStateMessage>
           ) : moodleCourses.length === 0 ? (
@@ -1523,7 +1485,7 @@ const CurriculumModule = () => {
                   onClick={() => loadCourseStudents(selectedCourse, { refresh: true })}
                   disabled={loadingStudents}
                   className="px-2 py-1.5 text-xs font-semibold text-gray-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg border border-gray-200 disabled:opacity-50 disabled:pointer-events-none"
-                  title="Refresh from Moodle (bypass cache)"
+                  title="Refresh grades"
                 >
                   Refresh
                 </button>
@@ -1551,11 +1513,11 @@ const CurriculumModule = () => {
             </div>
           </div>
           {!selectedCourse ? (
-            <InlineStateMessage>Select a course to see enrolled students.</InlineStateMessage>
+            <InlineStateMessage>{MSG.VALIDATION_SELECT_COURSE}</InlineStateMessage>
           ) : studentError ? (
             <InlineStateMessage type="error">{studentError}</InlineStateMessage>
           ) : courseStudents.length === 0 ? (
-            <InlineStateMessage>No enrolled students found for this course (according to {lmsName}).</InlineStateMessage>
+            <InlineStateMessage>{MSG.EMPTY_NO_STUDENTS_COURSE}</InlineStateMessage>
           ) : (
             <div className="space-y-3">
               <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-gray-400 border-b pb-2">
@@ -1591,7 +1553,7 @@ const CurriculumModule = () => {
                           {s.fullname}
                         </div>
                         <div className="text-xs text-gray-500 truncate">
-                          {s.email || `Moodle user ${s.moodle_user_id}`}
+                          {s.email || MSG.STUDENT_ACCOUNT_FALLBACK}
                         </div>
                       </div>
                     </div>
@@ -1648,7 +1610,7 @@ const CurriculumModule = () => {
             </div>
           )}
           <p className="mt-3 text-xs text-gray-400">
-            This list is loaded directly from {lmsName} enrolments.
+            This list shows students enrolled in this course.
             {studentsFetchedAt ? ` Last updated: ${new Date(studentsFetchedAt).toLocaleString()}.` : ''}
           </p>
         </div>
@@ -1793,7 +1755,7 @@ const CurriculumModule = () => {
                               {i + 1}. {s.fullname}
                             </div>
                             <div className="text-xs text-gray-500 truncate">
-                              {s.email || `Moodle user ${s.moodle_user_id}`}
+                              {s.email || MSG.STUDENT_ACCOUNT_FALLBACK}
                             </div>
                           </div>
                           <div className="text-sm font-extrabold text-indigo-700">
@@ -2221,14 +2183,13 @@ const StudentRegistration = ({ courses }) => {
 };
 
 const FacultyRoster = ({ students }) => {
-  const lmsName = useLmsName();
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
       <div className="p-6 border-b flex justify-between items-center bg-gray-50/50">
         <h3 className="text-lg font-bold">Class List: Grade 5 Mathematics</h3>
         <button className="text-indigo-600 flex items-center space-x-1 text-sm font-bold hover:bg-indigo-50 px-3 py-1.5 rounded-lg transition-colors">
           <LinkIcon size={14} />
-          <span>Launch {lmsName} Classroom</span>
+          <span>Launch classroom</span>
         </button>
       </div>
       <table className="w-full text-left">
@@ -2267,7 +2228,6 @@ const FacultyRoster = ({ students }) => {
 };
 
 const StudentDashboard = ({ moodleUserId, studentName }) => {
-  const lmsName = useLmsName();
   const [grades, setGrades] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -2283,7 +2243,7 @@ const StudentDashboard = ({ moodleUserId, studentName }) => {
         if (!cancelled) setGrades(data.grades || []);
       })
       .catch(() => {
-        if (!cancelled) setError('Could not load your grade overview right now.');
+        if (!cancelled) setError(MSG.LOAD_GRADE_OVERVIEW);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -2329,9 +2289,9 @@ const StudentDashboard = ({ moodleUserId, studentName }) => {
         <h3 className="text-xl font-black uppercase tracking-tight">My Dashboard</h3>
         <p className="text-indigo-100 text-base mt-2">
           Hi, <span className="font-bold">{studentName || 'Student'}</span>. Here is your personal
-          performance snapshot from {lmsName}.
+          performance snapshot from your courses.
         </p>
-        <p className="text-indigo-200 text-sm mt-1">Keep going - your progress is updated from your LMS grades.</p>
+        <p className="text-indigo-200 text-sm mt-1">Keep going — your progress is updated from your latest grades.</p>
         {loading && <p className="text-indigo-200 text-xs mt-2">Refreshing latest grades...</p>}
       </div>
       {error && <p className="text-red-600 bg-red-50 p-3 rounded-xl border border-red-100 text-sm">{error}</p>}
@@ -2439,7 +2399,7 @@ const StudentCurriculumExplorer = ({ moodleUserId, studentName }) => {
       })
       .catch((res) => {
         if (cancelled) return;
-        setError(friendlyStatusMessage(res?.status, 'Could not load grade categories right now.'));
+        setError(res?.status ? messageForHttpStatus(res.status) : MSG.LOAD_CATEGORIES);
       })
       .finally(() => {
         if (!cancelled) setLoadingInit(false);
@@ -2456,7 +2416,7 @@ const StudentCurriculumExplorer = ({ moodleUserId, studentName }) => {
       .catch(() => {
         if (cancelled) return;
         // Keep the selector usable even if grades are temporarily unavailable.
-        setError((prev) => prev || 'Could not load your grades right now. You can still browse categories.');
+        setError((prev) => prev || MSG.LOAD_MY_GRADES_PARTIAL);
       });
 
     return () => {
@@ -2487,7 +2447,7 @@ const StudentCurriculumExplorer = ({ moodleUserId, studentName }) => {
       })
       .catch((res) => {
         if (cancelled) return;
-        setError(friendlyStatusMessage(res?.status, 'Could not load courses for this category.'));
+        setError(res?.status ? messageForHttpStatus(res.status) : MSG.LOAD_COURSES_CATEGORY);
       })
       .finally(() => {
         if (!cancelled) setLoadingCourses(false);
@@ -2516,10 +2476,14 @@ const StudentCurriculumExplorer = ({ moodleUserId, studentName }) => {
         if (ok) {
           setDetailItems(Array.isArray(data?.items) ? data.items : []);
         } else {
-          setDetailError(data?.message || 'Could not load detailed grades for this course.');
+          setDetailError(MSG.LOAD_DETAILED_GRADES);
         }
       })
-      .catch(() => setDetailError('Request failed. Please try again.'))
+      .catch((res) =>
+        setDetailError(
+          res?.status ? messageForHttpStatus(res.status) : MSG.LOAD_DETAILED_GRADES
+        )
+      )
       .finally(() => setDetailLoading(false));
   };
 
@@ -2692,7 +2656,6 @@ const StudentCurriculumExplorer = ({ moodleUserId, studentName }) => {
 };
 
 const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
-  const lmsName = useLmsName();
   const isStudentScoped = !!lockedMoodleUserId;
   const [students, setStudents] = useState([]);
   const [selectedStudentId, setSelectedStudentId] = useState(lockedMoodleUserId ? String(lockedMoodleUserId) : '');
@@ -2729,7 +2692,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
         }
       })
       .catch(() => {
-        if (!cancelled) setError('Could not load students right now. Please try again.');
+        if (!cancelled) setError(MSG.LOAD_STUDENTS);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -2762,7 +2725,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
       .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
       .then(({ ok, data }) => {
         if (ok) {
-          setMessage(data.message || `Grades fetched from ${lmsName}.`);
+          setMessage(MSG.FETCH_GRADES_SUCCESS);
           setGrades(data.grades || []);
           if (typeof window !== 'undefined') {
             try {
@@ -2772,10 +2735,10 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
             }
           }
         } else {
-          setError(data.message || `Failed to fetch grades from ${lmsName}.`);
+          setError(MSG.FETCH_GRADES_FAILED);
         }
       })
-      .catch(() => setError('Request failed. Please try again.'))
+      .catch(() => setError(MSG.FETCH_GRADES_FAILED))
       .finally(() => setFetching(false));
   };
 
@@ -2794,10 +2757,10 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
         if (ok) {
           setDetailItems(data.items || []);
         } else {
-          setDetailError(data.message || 'Could not load detailed grades.');
+          setDetailError(MSG.LOAD_DETAILED_GRADES);
         }
       })
-      .catch(() => setDetailError('Request failed. Please try again.'))
+      .catch(() => setDetailError(MSG.LOAD_DETAILED_GRADES))
       .finally(() => setDetailLoading(false));
   };
 
@@ -2844,11 +2807,11 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
           <LinkIcon size={32} className="text-indigo-300" />
         </div>
         <div>
-          <h3 className="text-xl font-black uppercase tracking-tight text-white">{lmsName} Sync Hub</h3>
+          <h3 className="text-xl font-black uppercase tracking-tight text-white">Grade sync</h3>
           <p className="text-indigo-200 text-sm mt-1 max-w-md">
             {isStudentScoped
-              ? 'Quick sync view for your account. Use Grades Explorer for structured level -> course -> grade navigation.'
-              : `Fetch grades from ${lmsName} for a student. Search and select a student, then click "Fetch grades from ${lmsName}".`}
+              ? 'Quick sync view for your account. Use Grades Explorer for structured level → course → grade navigation.'
+              : 'Search for a student, select them, then update their grades.'}
           </p>
         </div>
       </div>
@@ -2873,7 +2836,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
             <div className="space-y-3">
               {!isStudentScoped && (
                 <>
-                  <label className="block text-sm font-medium text-gray-700">Select LMS user</label>
+                  <label className="block text-sm font-medium text-gray-700">Select student</label>
                   <input
                     type="search"
                     value={studentSearch}
@@ -2929,7 +2892,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
                     ))}
                     {filteredStudents.length === 0 && (
                       <div className="px-4 py-2 text-xs text-gray-500">
-                        {students.length === 0 ? 'No LMS users found.' : 'No students match your search.'}
+                        {students.length === 0 ? MSG.EMPTY_NO_STUDENTS_FOUND : MSG.EMPTY_NO_SEARCH_MATCH}
                       </div>
                     )}
                   </div>
@@ -2942,7 +2905,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
                 disabled={!selectedStudentId || fetching}
                 className="w-full px-4 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
               >
-                {fetching ? 'Fetching…' : isStudentScoped ? 'Load my grades' : `Fetch grades from ${lmsName}`}
+                {fetching ? 'Fetching…' : isStudentScoped ? 'Load my grades' : 'Update grades'}
               </button>
             </div>
           )}
@@ -2952,7 +2915,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
           <div className="flex items-center justify-between mb-4">
             <h4 className="font-bold flex items-center text-gray-800">
               <CheckCircle className="text-green-500 mr-2" size={18} />
-              Grades (from {lmsName})
+              Grades
             </h4>
             <button
               type="button"
@@ -2977,8 +2940,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
           </div>
           {grades.length === 0 ? (
             <p className="text-gray-500 text-sm">
-              Select a student and click &quot;Fetch grades from {lmsName}&quot; to
-              see grades here.
+              Select a student and click &quot;Update grades&quot; to see grades here.
             </p>
           ) : (
             <div className="space-y-2">
