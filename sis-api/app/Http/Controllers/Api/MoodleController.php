@@ -88,53 +88,115 @@ class MoodleController extends Controller
             $this->forgetSiteCaches();
         }
 
-        return Cache::remember($cacheKey, now()->addMinutes(30), function () {
-            $cats = $this->moodle->getCourseCategories();
-            if ($cats === null) {
-                return null;
-            }
+        $cached = Cache::get($cacheKey);
+        if (is_array($cached)) {
+            return $cached;
+        }
 
-            $categories = [];
-            foreach ($cats as $c) {
-                if (! is_array($c) || ! isset($c['id'])) {
-                    continue;
+        $lockKey = $this->moodleCacheKey('site_structure_lock');
+
+        try {
+            return Cache::lock($lockKey, 120)->block(120, function () use ($cacheKey) {
+                $cached = Cache::get($cacheKey);
+                if (is_array($cached)) {
+                    return $cached;
                 }
-                $categories[] = [
-                    'id' => (int) $c['id'],
-                    'name' => (string) ($c['name'] ?? ''),
-                ];
-            }
 
-            $categoryIds = array_column($categories, 'id');
-            $coursesByCategory = $this->moodle->getCoursesByCategories($categoryIds);
-
-            $totalCourses = 0;
-            $courseToCategory = [];
-            foreach ($categoryIds as $cid) {
-                $courses = $coursesByCategory[$cid] ?? null;
-                if (! is_array($courses)) {
-                    continue;
+                $data = $this->buildSiteStructureData();
+                if ($data !== null) {
+                    Cache::put($cacheKey, $data, now()->addMinutes(30));
                 }
-                $totalCourses += count($courses);
-                foreach ($courses as $course) {
-                    if (! isset($course['id'])) {
-                        continue;
-                    }
-                    $courseToCategory[(int) $course['id']] = $cid;
-                }
-            }
 
-            return [
-                'categories' => $categories,
-                'course_to_category' => $courseToCategory,
-                'total_categories' => count($categories),
-                'total_courses' => $totalCourses,
-                'cached_at' => now()->toIso8601String(),
-            ];
-        });
+                return $data;
+            });
+        } catch (\Illuminate\Contracts\Cache\LockTimeoutException) {
+            return Cache::get($cacheKey);
+        }
     }
 
-    private function rememberSiteEnrolmentData(bool $forceRefresh = false): ?array
+    /**
+     * @return array{
+     *   categories: array<int, array{id: int, name: string}>,
+     *   course_to_category: array<int, int>,
+     *   total_categories: int,
+     *   total_courses: int,
+     *   cached_at: string
+     * }|null
+     */
+    private function buildSiteStructureData(): ?array
+    {
+        $cats = $this->moodle->getCourseCategories();
+        if ($cats === null) {
+            return null;
+        }
+
+        $categories = [];
+        foreach ($cats as $c) {
+            if (! is_array($c) || ! isset($c['id'])) {
+                continue;
+            }
+            $categories[] = [
+                'id' => (int) $c['id'],
+                'name' => (string) ($c['name'] ?? ''),
+            ];
+        }
+
+        $categoryIds = array_column($categories, 'id');
+        $coursesByCategory = $this->moodle->getCoursesByCategories($categoryIds);
+
+        $totalCourses = 0;
+        $courseToCategory = [];
+        foreach ($categoryIds as $cid) {
+            $courses = $coursesByCategory[$cid] ?? null;
+            if (! is_array($courses)) {
+                continue;
+            }
+            $totalCourses += count($courses);
+            foreach ($courses as $course) {
+                if (! isset($course['id'])) {
+                    continue;
+                }
+                $courseToCategory[(int) $course['id']] = $cid;
+            }
+        }
+
+        return [
+            'categories' => $categories,
+            'course_to_category' => $courseToCategory,
+            'total_categories' => count($categories),
+            'total_courses' => $totalCourses,
+            'cached_at' => now()->toIso8601String(),
+        ];
+    }
+
+    /**
+     * @param  array<int, array{id: int, fullname: string, email: string, username: string}>  $usersById
+     * @return array<int, array{id: int, fullname: string, email: string, username: string}>
+     */
+    private function sortStudentList(array $usersById): array
+    {
+        $students = array_values($usersById);
+        usort($students, function (array $a, array $b) {
+            return strcasecmp($a['fullname'] ?? '', $b['fullname'] ?? '');
+        });
+
+        return $students;
+    }
+
+    /**
+     * @param  array<string, mixed>  $cached
+     * @return array<string, mixed>
+     */
+    private function hydrateEnrolmentCache(array $cached, bool $includeStudentList): array
+    {
+        if ($includeStudentList && empty($cached['students']) && ! empty($cached['users_by_id']) && is_array($cached['users_by_id'])) {
+            $cached['students'] = $this->sortStudentList($cached['users_by_id']);
+        }
+
+        return $cached;
+    }
+
+    private function rememberSiteEnrolmentData(bool $forceRefresh = false, bool $includeStudentList = true): ?array
     {
         $cacheKey = $this->moodleCacheKey('site_enrolment_data');
 
@@ -142,74 +204,119 @@ class MoodleController extends Controller
             $this->forgetSiteCaches();
         }
 
-        return Cache::remember($cacheKey, now()->addMinutes(30), function () {
-            $structure = $this->rememberSiteStructureData(false);
-            if ($structure === null) {
-                return null;
+        $cached = Cache::get($cacheKey);
+        if (is_array($cached)) {
+            if (! $includeStudentList || ! empty($cached['students'])) {
+                return $this->hydrateEnrolmentCache($cached, $includeStudentList);
             }
+        }
 
-            $categories = $structure['categories'];
-            $courseToCategory = $structure['course_to_category'];
-            $courseIds = array_keys($courseToCategory);
-            $enrolledByCourse = $this->moodle->getEnrolledUsersForCourses($courseIds);
+        $lockKey = $this->moodleCacheKey('site_enrolment_lock');
 
-            $usersById = [];
-            $studentsPerCategory = [];
-            foreach ($courseIds as $courseId) {
-                $cid = $courseToCategory[$courseId] ?? null;
-                if (! $cid) {
-                    continue;
-                }
-                $users = $enrolledByCourse[$courseId] ?? null;
-                if (! is_array($users)) {
-                    continue;
-                }
-                foreach ($users as $u) {
-                    if (! is_array($u) || ! isset($u['id'])) {
-                        continue;
+        try {
+            return Cache::lock($lockKey, 120)->block(120, function () use ($cacheKey, $includeStudentList) {
+                $cached = Cache::get($cacheKey);
+                if (is_array($cached)) {
+                    if (! $includeStudentList || ! empty($cached['students'])) {
+                        return $this->hydrateEnrolmentCache($cached, $includeStudentList);
                     }
-                    $uid = (int) $u['id'];
-                    $studentsPerCategory[$cid][$uid] = true;
+                    if (! empty($cached['users_by_id']) && is_array($cached['users_by_id'])) {
+                        $cached['students'] = $this->sortStudentList($cached['users_by_id']);
+                        Cache::put($cacheKey, $cached, now()->addMinutes(30));
 
-                    if (isset($usersById[$uid])) {
-                        continue;
+                        return $cached;
                     }
-                    $fullname = trim((string) (($u['fullname'] ?? '') ?: (($u['firstname'] ?? '').' '.($u['lastname'] ?? ''))));
-                    $usersById[$uid] = [
-                        'id' => $uid,
-                        'fullname' => $fullname !== '' ? $fullname : ('User '.$uid),
-                        'email' => (string) ($u['email'] ?? ''),
-                        'username' => (string) ($u['username'] ?? ''),
-                    ];
                 }
-            }
 
-            $students = array_values($usersById);
-            usort($students, function (array $a, array $b) {
-                return strcasecmp($a['fullname'] ?? '', $b['fullname'] ?? '');
+                $built = $this->buildSiteEnrolmentData($includeStudentList);
+                if ($built !== null) {
+                    Cache::put($cacheKey, $built, now()->addMinutes(30));
+                }
+
+                return $built;
             });
+        } catch (\Illuminate\Contracts\Cache\LockTimeoutException) {
+            $cached = Cache::get($cacheKey);
 
-            $studentBuckets = [];
-            foreach ($categories as $cat) {
-                $cid = $cat['id'];
-                $studentBuckets[] = [
-                    'category_id' => $cid,
-                    'category_name' => $cat['name'],
-                    'student_count' => isset($studentsPerCategory[$cid])
-                        ? count($studentsPerCategory[$cid])
-                        : 0,
+            return is_array($cached) ? $this->hydrateEnrolmentCache($cached, $includeStudentList) : null;
+        }
+    }
+
+    /**
+     * @return array{
+     *   users_by_id: array<int, array{id: int, fullname: string, email: string, username: string}>,
+     *   students: array<int, array{id: int, fullname: string, email: string, username: string}>|null,
+     *   total_categories: int,
+     *   total_courses: int,
+     *   total_students: int,
+     *   students_per_category: array<int, array{category_id: int, category_name: string, student_count: int}>,
+     *   cached_at: string
+     * }|null
+     */
+    private function buildSiteEnrolmentData(bool $includeStudentList): ?array
+    {
+        $structure = $this->rememberSiteStructureData(false);
+        if ($structure === null) {
+            return null;
+        }
+
+        $categories = $structure['categories'];
+        $courseToCategory = $structure['course_to_category'];
+        $courseIds = array_keys($courseToCategory);
+        $enrolledByCourse = $this->moodle->getEnrolledUsersForCourses($courseIds);
+
+        $usersById = [];
+        $studentsPerCategory = [];
+        foreach ($courseIds as $courseId) {
+            $cid = $courseToCategory[$courseId] ?? null;
+            if (! $cid) {
+                continue;
+            }
+            $users = $enrolledByCourse[$courseId] ?? null;
+            if (! is_array($users)) {
+                continue;
+            }
+            foreach ($users as $u) {
+                if (! is_array($u) || ! isset($u['id'])) {
+                    continue;
+                }
+                $uid = (int) $u['id'];
+                $studentsPerCategory[$cid][$uid] = true;
+
+                if (isset($usersById[$uid])) {
+                    continue;
+                }
+                $fullname = trim((string) (($u['fullname'] ?? '') ?: (($u['firstname'] ?? '').' '.($u['lastname'] ?? ''))));
+                $usersById[$uid] = [
+                    'id' => $uid,
+                    'fullname' => $fullname !== '' ? $fullname : ('User '.$uid),
+                    'email' => (string) ($u['email'] ?? ''),
+                    'username' => (string) ($u['username'] ?? ''),
                 ];
             }
+        }
 
-            return [
-                'students' => $students,
-                'total_categories' => $structure['total_categories'],
-                'total_courses' => $structure['total_courses'],
-                'total_students' => count($usersById),
-                'students_per_category' => $studentBuckets,
-                'cached_at' => now()->toIso8601String(),
+        $studentBuckets = [];
+        foreach ($categories as $cat) {
+            $cid = $cat['id'];
+            $studentBuckets[] = [
+                'category_id' => $cid,
+                'category_name' => $cat['name'],
+                'student_count' => isset($studentsPerCategory[$cid])
+                    ? count($studentsPerCategory[$cid])
+                    : 0,
             ];
-        });
+        }
+
+        return [
+            'users_by_id' => $usersById,
+            'students' => $includeStudentList ? $this->sortStudentList($usersById) : null,
+            'total_categories' => $structure['total_categories'],
+            'total_courses' => $structure['total_courses'],
+            'total_students' => count($usersById),
+            'students_per_category' => $studentBuckets,
+            'cached_at' => now()->toIso8601String(),
+        ];
     }
 
     /**
@@ -297,14 +404,16 @@ class MoodleController extends Controller
         }
 
         $forceRefresh = $this->canForceRefresh($request);
-        $data = $this->rememberSiteEnrolmentData($forceRefresh);
+        $data = $this->rememberSiteEnrolmentData($forceRefresh, true);
 
         if ($data === null) {
             return response()->json(['message' => 'Could not fetch Moodle site students'], 502);
         }
 
+        $students = $data['students'] ?? [];
+
         return response()->json([
-            'students' => $data['students'],
+            'students' => $students,
             'cached_at' => $data['cached_at'],
         ]);
     }
@@ -340,7 +449,7 @@ class MoodleController extends Controller
             ]);
         }
 
-        $data = $this->rememberSiteEnrolmentData($forceRefresh);
+        $data = $this->rememberSiteEnrolmentData($forceRefresh, false);
 
         if ($data === null) {
             return response()->json(['message' => 'Could not fetch Moodle overview metrics'], 502);

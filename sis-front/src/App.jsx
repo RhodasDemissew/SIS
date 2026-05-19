@@ -24,7 +24,8 @@ import {
   Phone,
   User,
   Calendar,
-  Download
+  Download,
+  Menu,
 } from 'lucide-react';
 import {
   MSG,
@@ -168,6 +169,53 @@ function writeOverviewCache(metrics) {
   } catch {
     // ignore
   }
+}
+
+function isOverviewCacheFull(cached) {
+  return (
+    cached &&
+    cached.partial !== true &&
+    typeof cached.total_students === 'number'
+  );
+}
+
+function fetchOverviewMetrics(url) {
+  return apiFetch(url).then((res) =>
+    res.ok ? res.json() : Promise.reject(new Error('metrics failed'))
+  );
+}
+
+let overviewPrefetchPromise = null;
+
+/** Shared admin dashboard prefetch (login + dashboard dedupe). */
+function prefetchOverviewMetrics() {
+  const cached = readOverviewCache();
+  if (isOverviewCacheFull(cached)) {
+    return Promise.resolve(cached);
+  }
+
+  if (!overviewPrefetchPromise) {
+    overviewPrefetchPromise = (async () => {
+      const fastUrl = '/api/moodle/overview-metrics?include_students=0';
+      const fullUrl = '/api/moodle/overview-metrics?include_students=1';
+
+      if (cached && cached.partial === true) {
+        const full = await fetchOverviewMetrics(fullUrl);
+        writeOverviewCache(full);
+        return full;
+      }
+
+      const partial = await fetchOverviewMetrics(fastUrl);
+      writeOverviewCache(partial);
+      const full = await fetchOverviewMetrics(fullUrl);
+      writeOverviewCache(full);
+      return full;
+    })().finally(() => {
+      overviewPrefetchPromise = null;
+    });
+  }
+
+  return overviewPrefetchPromise;
 }
 
 function applyOverviewMetrics(metrics, setters) {
@@ -323,7 +371,7 @@ function GradeBarRow({ grade, count, width, delayMs, animate }) {
       className="flex items-center gap-3 text-xs px-2 py-1.5 rounded-xl hover:bg-indigo-50/60 transition-colors dashboard-stat-enter"
       style={{ animationDelay: `${delayMs}ms` }}
     >
-      <div className="w-32 truncate text-gray-600 font-semibold">{grade}</div>
+      <div className="w-20 sm:w-32 min-w-0 truncate text-gray-600 font-semibold">{grade}</div>
       <div className="flex-1 h-3.5 rounded-full bg-gray-100 overflow-hidden">
         <div
           className="h-3.5 rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-sky-500 transition-[width] duration-700 ease-out"
@@ -562,8 +610,8 @@ const LandingLogin = ({ onLogin }) => {
   };
 
   return (
-    <div className="min-h-screen bg-indigo-950 flex items-center justify-center p-6">
-      <div className="w-full max-w-md">
+    <div className="min-h-screen bg-indigo-950 flex items-center justify-center p-4 sm:p-6">
+      <div className="w-full max-w-md max-w-[100vw]">
         <div className="bg-white rounded-3xl shadow-2xl overflow-hidden border border-indigo-100">
           <div className="p-8 pb-6 bg-indigo-900 text-white text-center">
             <h1 className="text-3xl font-bold tracking-tight text-white">SIS</h1>
@@ -635,6 +683,77 @@ const LandingLogin = ({ onLogin }) => {
   );
 };
 
+const AppSidebarPanel = ({
+  menuItems,
+  userRole,
+  currentUser,
+  setUserRole,
+  handleLogout,
+  onNavigate,
+}) => (
+  <div className="flex flex-col flex-1 min-h-0">
+    <div className="p-4 sm:p-6 border-b border-indigo-900">
+      <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white">SIS</h1>
+      <p className="text-indigo-400 text-xs uppercase tracking-widest mt-1 font-semibold">Student Information System</p>
+    </div>
+
+    <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+      {menuItems[userRole].map((item) => (
+        <NavLink
+          key={item.id}
+          to={`/${item.id}`}
+          onClick={onNavigate}
+          className={({ isActive }) =>
+            `w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all ${
+              isActive ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-950/50' : 'text-indigo-300 hover:bg-indigo-900 hover:text-white'
+            }`
+          }
+        >
+          <item.icon size={20} />
+          <span className="font-medium">{item.label}</span>
+        </NavLink>
+      ))}
+    </nav>
+
+    <div className="p-4 border-t border-indigo-900">
+      <div className="flex items-center space-x-3 mb-4 px-4 text-sm">
+        <UserCircle size={20} className="text-indigo-400 shrink-0" />
+        <div className="truncate min-w-0">
+          <p className="text-[10px] text-indigo-500 font-bold uppercase mb-1">Signed in as</p>
+          <p className="text-white text-sm font-semibold">{currentUser?.name || 'User'}</p>
+          {(currentUser?.roles || []).length > 1 && (
+            <select
+              value={userRole}
+              onChange={(e) => {
+                const next = e.target.value;
+                setUserRole(next);
+                if (typeof window !== 'undefined') {
+                  window.localStorage.setItem(SIS_ACTIVE_ROLE_KEY, next);
+                }
+              }}
+              className="mt-2 w-full bg-indigo-900 border border-indigo-700 rounded text-[11px] px-2 py-1 text-indigo-100"
+            >
+              {((currentUser?.roles || []).filter((r) => SIS_ALLOWED_ROLES.includes(r))).map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={() => handleLogout()}
+        className="w-full flex items-center space-x-3 px-4 py-3 text-indigo-400 hover:text-white hover:bg-indigo-900 rounded-xl transition-colors"
+      >
+        <LogOut size={18} />
+        <span className="text-sm font-medium">Logout</span>
+      </button>
+    </div>
+  </div>
+);
+
 const App = () => {
   const location = useLocation();
   const [isLoggedIn, setIsLoggedIn] = useState(() => readInitialAuthState().loggedIn);
@@ -654,6 +773,13 @@ const App = () => {
   const activeTab = pathname;
   const [students, setStudents] = useState(INITIAL_STUDENTS);
   const [courses, setCourses] = useState(INITIAL_COURSES);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const closeSidebar = React.useCallback(() => setSidebarOpen(false), []);
+
+  React.useEffect(() => {
+    closeSidebar();
+  }, [pathname, closeSidebar]);
 
   const handleLogin = React.useCallback((session) => {
     if (session?.session) {
@@ -665,7 +791,7 @@ const App = () => {
       applyAuthFromPayload(session, { setCurrentUser, setLmsName, setUserRole });
       const roles = Array.isArray(session.user.roles) ? session.user.roles : [];
       if (roles.includes('admin')) {
-        apiFetch('/api/moodle/overview-metrics?include_students=0').catch(() => {});
+        prefetchOverviewMetrics().catch(() => {});
       }
     }
     setIsLoggedIn(true);
@@ -844,87 +970,77 @@ const App = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 flex text-slate-900 font-sans">
-      {/* Sidebar */}
-      <div className="w-64 bg-indigo-950 text-white flex flex-col shrink-0">
-        <div className="p-6 border-b border-indigo-900">
-          <h1 className="text-2xl font-bold tracking-tight text-white">SIS</h1>
-          <p className="text-indigo-400 text-xs uppercase tracking-widest mt-1 font-semibold">Student Information System</p>
-        </div>
-        
-        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          {menuItems[userRole].map((item) => (
-            <NavLink
-              key={item.id}
-              to={`/${item.id}`}
-              className={({ isActive }) =>
-                `w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all ${
-                  isActive ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-950/50' : 'text-indigo-300 hover:bg-indigo-900 hover:text-white'
-                }`
-              }
-            >
-              <item.icon size={20} />
-              <span className="font-medium">{item.label}</span>
-            </NavLink>
-          ))}
-        </nav>
-
-        <div className="p-4 border-t border-indigo-900">
-          <div className="flex items-center space-x-3 mb-4 px-4 text-sm">
-            <UserCircle size={20} className="text-indigo-400" />
-            <div className="truncate">
-              <p className="text-[10px] text-indigo-500 font-bold uppercase mb-1">Signed in as</p>
-              <p className="text-white text-sm font-semibold">{currentUser?.name || 'User'}</p>
-              {(currentUser?.roles || []).length > 1 && (
-                <select
-                  value={userRole}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    setUserRole(next);
-                    if (typeof window !== 'undefined') {
-                      window.localStorage.setItem(SIS_ACTIVE_ROLE_KEY, next);
-                    }
-                  }}
-                  className="mt-2 w-full bg-indigo-900 border border-indigo-700 rounded text-[11px] px-2 py-1 text-indigo-100"
-                >
-                  {((currentUser?.roles || []).filter((r) => SIS_ALLOWED_ROLES.includes(r))).map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
-          </div>
-          <button
-            onClick={() => handleLogout()}
-            className="w-full flex items-center space-x-3 px-4 py-3 text-indigo-400 hover:text-white hover:bg-indigo-900 rounded-xl transition-colors"
-          >
-            <LogOut size={18} />
-            <span className="text-sm font-medium">Logout</span>
-          </button>
-        </div>
+      {/* Desktop sidebar */}
+      <div className="hidden lg:flex lg:flex-col lg:w-64 bg-indigo-950 text-white shrink-0">
+        <AppSidebarPanel
+          menuItems={menuItems}
+          userRole={userRole}
+          currentUser={currentUser}
+          setUserRole={setUserRole}
+          handleLogout={handleLogout}
+        />
       </div>
 
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col h-screen overflow-hidden">
-        <header className="h-16 bg-white border-b flex items-center justify-between px-8 shrink-0">
-          <div className="flex items-center text-gray-400 space-x-2">
-            <span className="capitalize text-[10px] font-black tracking-widest bg-gray-100 px-2 py-1 rounded text-gray-500">{userRole}</span>
-            <span className="text-gray-300">/</span>
-            <span className="text-gray-900 font-semibold">{activeMenuLabel}</span>
+      {/* Mobile drawer */}
+      {sidebarOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/50"
+            aria-label="Close menu"
+            onClick={closeSidebar}
+          />
+          <div className="absolute inset-y-0 left-0 w-64 max-w-[85vw] bg-indigo-950 text-white flex flex-col shadow-xl">
+            <div className="flex justify-end p-2 border-b border-indigo-900">
+              <button
+                type="button"
+                onClick={closeSidebar}
+                className="p-2 text-indigo-300 hover:text-white rounded-lg hover:bg-indigo-900"
+                aria-label="Close menu"
+              >
+                <X size={22} />
+              </button>
+            </div>
+            <AppSidebarPanel
+              menuItems={menuItems}
+              userRole={userRole}
+              currentUser={currentUser}
+              setUserRole={setUserRole}
+              handleLogout={handleLogout}
+              onNavigate={closeSidebar}
+            />
           </div>
-          <div className="flex items-center gap-2">
+        </div>
+      )}
+
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col min-h-screen min-w-0">
+        <header className="h-14 sm:h-16 bg-white border-b flex items-center justify-between px-4 sm:px-6 lg:px-8 shrink-0 gap-3">
+          <div className="flex items-center text-gray-400 space-x-2 min-w-0">
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(true)}
+              className="lg:hidden p-2 -ml-2 text-gray-600 hover:bg-gray-100 rounded-lg shrink-0"
+              aria-label="Open menu"
+            >
+              <Menu size={22} />
+            </button>
+            <span className="capitalize text-[10px] font-black tracking-widest bg-gray-100 px-2 py-1 rounded text-gray-500 shrink-0">{userRole}</span>
+            <span className="text-gray-300 hidden sm:inline">/</span>
+            <span className="text-gray-900 font-semibold truncate">{activeMenuLabel}</span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
             <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center">
               <UserCircle size={16} />
             </div>
-            <div className="flex flex-col items-end leading-tight">
-              <p className="text-sm font-semibold text-gray-900">{currentUser?.name || 'User'}</p>
-              <p className="text-xs text-gray-500">{currentUser?.email || 'No email available'}</p>
+            <div className="flex flex-col items-end leading-tight min-w-0">
+              <p className="text-sm font-semibold text-gray-900 truncate max-w-[120px] sm:max-w-none">{currentUser?.name || 'User'}</p>
+              <p className="text-xs text-gray-500 hidden md:block truncate max-w-[180px]">{currentUser?.email || 'No email available'}</p>
             </div>
           </div>
         </header>
 
-        <main className="p-8 overflow-y-auto flex-1">
+        <main className="p-4 md:p-8 overflow-y-auto flex-1 min-h-0">
           {globalNotice && (
             <div className="mb-4">
               <InlineStateMessage type={globalNotice.type}>
@@ -986,42 +1102,58 @@ const Dashboard = ({ role, lmsName }) => {
     if (cached) {
       applyOverviewMetrics(cached, metricSetters);
       setLoading(false);
-      setStatsLoading(!!cached.partial);
-      if (!cached.partial) setChartReady(true);
+      setStatsLoading(!isOverviewCacheFull(cached));
+      if (isOverviewCacheFull(cached)) {
+        setChartReady(true);
+      }
     } else {
       setLoading(true);
       setStatsLoading(true);
     }
     setError(null);
 
-    const fetchMetrics = (url) =>
-      apiFetch(url).then((res) => (res.ok ? res.json() : Promise.reject(new Error('metrics failed'))));
+    const applyFull = (full) => {
+      if (cancelled || !full) return;
+      applyOverviewMetrics(full, metricSetters);
+      writeOverviewCache(full);
+      setStatsLoading(false);
+      setLoading(false);
+    };
 
-    const fastUrl = '/api/moodle/overview-metrics?include_students=0';
-    const fullUrl = '/api/moodle/overview-metrics?include_students=1';
-    let fastOk = false;
+    if (isOverviewCacheFull(cached)) {
+      return () => {
+        cancelled = true;
+      };
+    }
 
-    fetchMetrics(fastUrl)
-      .then((partial) => {
-        if (cancelled) return null;
-        fastOk = true;
-        applyOverviewMetrics(partial, metricSetters);
-        setLoading(false);
-        setStatsLoading(true);
-        return fetchMetrics(fullUrl);
-      })
+    if (cached && cached.partial === true) {
+      prefetchOverviewMetrics()
+        .then(applyFull)
+        .catch(() => {
+          if (cancelled) return;
+          setMoodleOk(false);
+          setError(MSG.LOAD_DASHBOARD);
+          setLoading(false);
+          setStatsLoading(false);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    prefetchOverviewMetrics()
       .then((full) => {
-        if (cancelled || !full) return;
-        applyOverviewMetrics(full, metricSetters);
-        writeOverviewCache(full);
-        setStatsLoading(false);
+        if (cancelled) return;
+        const partial = readOverviewCache();
+        if (partial && partial.partial === true) {
+          applyOverviewMetrics(partial, metricSetters);
+        }
+        applyFull(full);
       })
       .catch(() => {
         if (cancelled) return;
-        if (!fastOk) {
-          setMoodleOk(false);
-          setError(MSG.LOAD_DASHBOARD);
-        }
+        setMoodleOk(false);
+        setError(MSG.LOAD_DASHBOARD);
         setLoading(false);
         setStatsLoading(false);
       });
@@ -1072,7 +1204,7 @@ const Dashboard = ({ role, lmsName }) => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-xl font-bold text-gray-900">Dashboard</h2>
           <p className="text-sm text-gray-500">At-a-glance overview for administrators.</p>
@@ -1161,12 +1293,16 @@ const Dashboard = ({ role, lmsName }) => {
             </div>
           </div>
           <h3 className="text-gray-500 text-sm font-medium">Enrolled students</h3>
-          <AnimatedStatNumber
-            value={totalMoodleStudents}
-            className="text-2xl font-bold text-gray-900 mt-1 tabular-nums"
-            duration={900}
-            delay={240}
-          />
+          {statsLoading && totalMoodleStudents == null ? (
+            <div className="mt-1 h-8 w-16 rounded-lg bg-gray-100 animate-pulse" aria-label="Loading student count" />
+          ) : (
+            <AnimatedStatNumber
+              value={totalMoodleStudents}
+              className="text-2xl font-bold text-gray-900 mt-1 tabular-nums"
+              duration={900}
+              delay={240}
+            />
+          )}
           <p className="text-[11px] text-gray-400 mt-1">
             Unique students enrolled across all courses.
           </p>
@@ -1236,14 +1372,14 @@ const AdmissionsModule = ({ students, loading, onOpenModal, onViewRecord, onDele
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h3 className="text-xl font-bold text-gray-900">Student Admissions</h3>
           <p className="text-sm text-gray-500">System registry for K-12 and Language School enrollment</p>
         </div>
         <button 
           onClick={onOpenModal}
-          className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all flex items-center shadow-lg shadow-indigo-200"
+          className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 transition-all flex items-center justify-center shadow-lg shadow-indigo-200 w-full sm:w-auto"
         >
           <UserPlus size={18} className="mr-2" />
           Admit Student
@@ -1251,7 +1387,8 @@ const AdmissionsModule = ({ students, loading, onOpenModal, onViewRecord, onDele
       </div>
 
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-        <table className="w-full text-left">
+        <div className="overflow-x-auto">
+        <table className="w-full text-left min-w-[640px]">
           <thead className="bg-gray-50 text-gray-400 text-[10px] uppercase font-bold tracking-widest border-b">
             <tr>
               <th className="px-6 py-4">Student ID</th>
@@ -1308,6 +1445,7 @@ const AdmissionsModule = ({ students, loading, onOpenModal, onViewRecord, onDele
             )}
           </tbody>
         </table>
+        </div>
       </div>
       {!loading && students.length > pageSize && (
         <div className="flex items-center justify-between px-1">
@@ -1363,7 +1501,7 @@ const StudentProfileModal = ({ student, onClose }) => {
           <div className="space-y-6">
             <h5 className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-500 border-b pb-2">Personal Information</h5>
             
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="flex items-center space-x-3">
                 <div className="p-2 bg-gray-50 rounded-lg"><Calendar size={16} className="text-gray-400" /></div>
                 <div>
@@ -1708,14 +1846,14 @@ const CurriculumModule = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h3 className="text-xl font-bold text-gray-900">{SIS_NAV.curriculum.label}</h3>
           <p className="text-sm text-gray-500">Grade level → course → students and grades</p>
         </div>
         <button
           onClick={toggleCompare}
-          className={`px-4 py-2 rounded-xl text-sm font-bold border transition-all ${
+          className={`px-4 py-2 rounded-xl text-sm font-bold border transition-all w-full sm:w-auto ${
             compareMode ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50'
           }`}
         >
@@ -1846,13 +1984,13 @@ const CurriculumModule = () => {
             <InlineStateMessage>{MSG.EMPTY_NO_STUDENTS_COURSE}</InlineStateMessage>
           ) : (
             <div className="space-y-3">
-              <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-gray-400 border-b pb-2">
-                <div className="flex-1 flex items-center gap-3">
-                  <span className="w-6 text-center">#</span>
+              <div className="hidden sm:flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-gray-400 border-b pb-2">
+                <div className="flex-1 flex items-center gap-3 min-w-0">
+                  <span className="w-6 text-center shrink-0">#</span>
                   <span className="flex-1">Student Name</span>
-                  <span className="w-40">Email</span>
+                  <span className="w-40 hidden md:inline">Email</span>
                 </div>
-                <div className="flex items-center gap-4 pr-1">
+                <div className="flex items-center gap-4 pr-1 shrink-0">
                   <button
                     type="button"
                     onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
@@ -1868,10 +2006,10 @@ const CurriculumModule = () => {
                 {pagedSortedStudents.map((s, idx) => (
                   <div
                     key={`${s.moodle_user_id}-${idx}`}
-                    className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0 hover:bg-gray-50 rounded-lg px-2"
+                    className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 py-2 border-b border-gray-100 last:border-0 hover:bg-gray-50 rounded-lg px-2"
                   >
                     <div className="flex-1 flex items-center gap-3 min-w-0">
-                      <span className="w-6 text-center text-xs font-mono text-gray-400">
+                      <span className="w-6 text-center text-xs font-mono text-gray-400 shrink-0">
                         {(studentsPage - 1) * studentsPageSize + idx + 1}
                       </span>
                       <div className="flex-1 min-w-0">
@@ -1883,7 +2021,7 @@ const CurriculumModule = () => {
                         </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 shrink-0 self-end sm:self-center">
                       {compareMode && (
                         <input
                           type="checkbox"
@@ -2276,7 +2414,7 @@ const CourseFormModal = ({ onClose, onSubmit }) => {
           </button>
         </div>
         <form onSubmit={handleSubmit} className="p-6 space-y-5">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Module Code</label>
               <input 
@@ -2394,7 +2532,7 @@ const AdmissionFormModal = ({ onClose, onSubmit }) => {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
              <div>
               <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Age</label>
               <input 
@@ -2478,7 +2616,8 @@ const StudentRegistration = ({ courses }) => {
       <div className="p-6 border-b">
         <h3 className="text-lg font-bold">Available Class Modules</h3>
       </div>
-      <table className="w-full text-left">
+      <div className="overflow-x-auto">
+      <table className="w-full text-left min-w-[560px]">
         <thead className="bg-gray-50 text-gray-400 text-[10px] uppercase font-bold tracking-widest">
           <tr>
             <th className="px-6 py-4 text-center">Module Code</th>
@@ -2504,6 +2643,7 @@ const StudentRegistration = ({ courses }) => {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 };
@@ -2511,14 +2651,15 @@ const StudentRegistration = ({ courses }) => {
 const FacultyRoster = ({ students }) => {
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-      <div className="p-6 border-b flex justify-between items-center bg-gray-50/50">
+      <div className="p-6 border-b flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center bg-gray-50/50">
         <h3 className="text-lg font-bold">Class List: Grade 5 Mathematics</h3>
         <button className="text-indigo-600 flex items-center space-x-1 text-sm font-bold hover:bg-indigo-50 px-3 py-1.5 rounded-lg transition-colors">
           <LinkIcon size={14} />
           <span>Launch classroom</span>
         </button>
       </div>
-      <table className="w-full text-left">
+      <div className="overflow-x-auto">
+      <table className="w-full text-left min-w-[560px]">
         <thead className="bg-gray-50 text-gray-400 text-[10px] uppercase font-bold tracking-widest">
           <tr>
             <th className="px-6 py-4">ID</th>
@@ -2549,6 +2690,7 @@ const FacultyRoster = ({ students }) => {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 };
@@ -3150,7 +3292,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
 
   return (
     <div className="space-y-6">
-      <div className="bg-indigo-900 border border-indigo-100 p-8 rounded-3xl flex items-start space-x-6 text-white shadow-xl shadow-indigo-100">
+      <div className="bg-indigo-900 border border-indigo-100 p-6 sm:p-8 rounded-3xl flex flex-col sm:flex-row sm:items-start gap-4 sm:gap-6 text-white shadow-xl shadow-indigo-100">
         <div className="bg-white/10 p-4 rounded-2xl backdrop-blur-md">
           <BarChart3 size={32} className="text-indigo-300" />
         </div>
