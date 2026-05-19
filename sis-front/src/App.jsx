@@ -1265,10 +1265,10 @@ const Dashboard = ({ role, lmsName }) => {
             }
           }}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-gray-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg border border-gray-200 disabled:opacity-50"
-          title="Fetch latest counts from Moodle (ignores cache)"
+          title="Fetch latest counts (ignores cache)"
         >
           <RefreshCw size={14} className={statsLoading ? 'animate-spin' : ''} />
-          Refresh from Moodle
+          Refresh
         </button>
         </div>
       </div>
@@ -3368,7 +3368,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
             <span>Students &amp; Fetch</span>
             <div className="flex items-center gap-2">
               {studentsRefreshing && (
-                <span className="text-xs font-normal text-gray-400">Updating from Moodle…</span>
+                <span className="text-xs font-normal text-gray-400">Updating list…</span>
               )}
               {!isStudentScoped && (
                 <button
@@ -3376,7 +3376,7 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
                   onClick={handleRefreshStudentsFromMoodle}
                   disabled={studentsRefreshing || loading}
                   className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-lg border border-indigo-200 disabled:opacity-50"
-                  title="Fetch latest student list from Moodle (ignores cache)"
+                  title="Fetch latest student list (ignores cache)"
                 >
                   <RefreshCw size={13} className={studentsRefreshing ? 'animate-spin' : ''} />
                   Refresh
