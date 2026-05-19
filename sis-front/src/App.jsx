@@ -692,7 +692,7 @@ const AppSidebarPanel = ({
   onNavigate,
 }) => (
   <div className="flex flex-col flex-1 min-h-0">
-    <div className="p-4 sm:p-6 border-b border-indigo-900">
+    <div className="p-4 sm:p-6 border-b border-indigo-900 shrink-0">
       <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white">SIS</h1>
       <p className="text-indigo-400 text-xs uppercase tracking-widest mt-1 font-semibold">Student Information System</p>
     </div>
@@ -715,13 +715,13 @@ const AppSidebarPanel = ({
       ))}
     </nav>
 
-    <div className="p-4 border-t border-indigo-900">
+    <div className="p-4 border-t border-indigo-900 shrink-0 mt-auto">
       <div className="flex items-center space-x-3 mb-4 px-4 text-sm">
         <UserCircle size={20} className="text-indigo-400 shrink-0" />
         <div className="truncate min-w-0">
           <p className="text-[10px] text-indigo-500 font-bold uppercase mb-1">Signed in as</p>
           <p className="text-white text-sm font-semibold">{currentUser?.name || 'User'}</p>
-          {(currentUser?.roles || []).length > 1 && (
+          {(currentUser?.roles || []).length > 1 ? (
             <select
               value={userRole}
               onChange={(e) => {
@@ -739,6 +739,8 @@ const AppSidebarPanel = ({
                 </option>
               ))}
             </select>
+          ) : (
+            <p className="mt-1 text-[11px] text-indigo-400 capitalize">{userRole}</p>
           )}
         </div>
       </div>
@@ -971,7 +973,7 @@ const App = () => {
   return (
     <div className="min-h-screen bg-gray-50 flex text-slate-900 font-sans">
       {/* Desktop sidebar */}
-      <div className="hidden lg:flex lg:flex-col lg:w-64 bg-indigo-950 text-white shrink-0">
+      <div className="hidden lg:flex lg:flex-col lg:w-64 lg:h-screen lg:sticky lg:top-0 bg-indigo-950 text-white shrink-0">
         <AppSidebarPanel
           menuItems={menuItems}
           userRole={userRole}
