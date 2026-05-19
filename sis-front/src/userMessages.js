@@ -41,12 +41,10 @@ export const MSG = {
   VALIDATION_SELECT_COURSE: 'Select a course to see enrolled students.',
 
   STUDENT_ACCOUNT_FALLBACK: 'Student account',
-
-  SESSION_EXPIRED: 'Your session expired. Please sign in again.',
 };
 
 export function messageForHttpStatus(status) {
-  if (status === 401) return MSG.SESSION_EXPIRED;
+  if (status === 401) return MSG.GENERIC_RETRY;
   if (status === 403) return MSG.PERMISSION_DENIED;
   return MSG.GENERIC_RETRY;
 }

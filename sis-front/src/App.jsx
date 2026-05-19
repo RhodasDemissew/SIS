@@ -434,7 +434,6 @@ const SIS_ACTIVE_ROLE_KEY = 'sis_active_role';
 const SIS_LAST_ACTIVITY_KEY = 'sis_last_activity_at';
 const SIS_SESSION_EXPIRES_KEY = 'sis_session_expires_at';
 const SIS_IDLE_MINUTES_KEY = 'sis_idle_timeout_minutes';
-const SIS_LOGOUT_NOTICE_KEY = 'sis_logout_notice';
 const DEFAULT_IDLE_MINUTES = 360;
 const SIS_ALLOWED_ROLES = ['admin', 'student'];
 
@@ -494,7 +493,6 @@ function readInitialAuthState() {
   if (!token) return { loggedIn: false };
   if (isSessionExpiredByInactivity()) {
     clearAuthStorage();
-    sessionStorage.setItem(SIS_LOGOUT_NOTICE_KEY, MSG.SESSION_EXPIRED);
     return { loggedIn: false };
   }
   return { loggedIn: true };
@@ -571,16 +569,6 @@ const LandingLogin = ({ onLogin }) => {
   const [tenants, setTenants] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [sessionNotice, setSessionNotice] = useState(null);
-
-  useEffect(() => {
-    const notice = sessionStorage.getItem(SIS_LOGOUT_NOTICE_KEY);
-    if (notice) {
-      setSessionNotice(notice);
-      sessionStorage.removeItem(SIS_LOGOUT_NOTICE_KEY);
-    }
-  }, []);
-
   useEffect(() => {
     fetch(buildApiUrl('/api/tenants'))
       .then((r) => r.json())
@@ -640,11 +628,6 @@ const LandingLogin = ({ onLogin }) => {
             </p>
           </div>
           <form onSubmit={handleSubmit} autoComplete="off" className="p-8 pt-6 space-y-5">
-            {sessionNotice && (
-              <p className="text-amber-800 bg-amber-50 border border-amber-100 rounded-xl px-4 py-2 text-sm">
-                {sessionNotice}
-              </p>
-            )}
             {error && (
               <p className="text-red-600 bg-red-50 border border-red-100 rounded-xl px-4 py-2 text-sm">{error}</p>
             )}
@@ -824,9 +807,6 @@ const App = () => {
       apiFetch('/api/logout', { method: 'POST' }).catch(() => {});
     }
     clearAuthStorage();
-    if (reason === 'idle' || reason === 'expired') {
-      sessionStorage.setItem(SIS_LOGOUT_NOTICE_KEY, MSG.SESSION_EXPIRED);
-    }
     setCurrentUser(null);
     setIsLoggedIn(false);
   }, []);
