@@ -10,6 +10,6 @@ return [
     | max_lifetime: hard cap from token creation (expires_at).
     |
     */
-    'token_idle_minutes' => (int) env('SIS_API_TOKEN_IDLE_MINUTES', 180),
-    'token_max_lifetime_minutes' => (int) env('SIS_API_TOKEN_MAX_LIFETIME_MINUTES', 480),
+    'token_idle_minutes' => (int) env('SIS_API_TOKEN_IDLE_MINUTES', 360),
+    'token_max_lifetime_minutes' => (int) env('SIS_API_TOKEN_MAX_LIFETIME_MINUTES', 10080),
 ];

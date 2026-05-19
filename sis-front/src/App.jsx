@@ -26,6 +26,7 @@ import {
   Calendar,
   Download,
   Menu,
+  RefreshCw,
 } from 'lucide-react';
 import {
   MSG,
@@ -166,6 +167,24 @@ function writeOverviewCache(metrics) {
   if (typeof window === 'undefined' || !metrics) return;
   try {
     sessionStorage.setItem(overviewCacheKey(), JSON.stringify(metrics));
+  } catch {
+    // ignore
+  }
+}
+
+function clearOverviewCache() {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.removeItem(overviewCacheKey());
+  } catch {
+    // ignore
+  }
+}
+
+function clearSiteStudentsCache() {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.removeItem(siteStudentsCacheKey());
   } catch {
     // ignore
   }
@@ -416,7 +435,7 @@ const SIS_LAST_ACTIVITY_KEY = 'sis_last_activity_at';
 const SIS_SESSION_EXPIRES_KEY = 'sis_session_expires_at';
 const SIS_IDLE_MINUTES_KEY = 'sis_idle_timeout_minutes';
 const SIS_LOGOUT_NOTICE_KEY = 'sis_logout_notice';
-const DEFAULT_IDLE_MINUTES = 180;
+const DEFAULT_IDLE_MINUTES = 360;
 const SIS_ALLOWED_ROLES = ['admin', 'student'];
 
 function parseIdleMinutesFromEnv() {
@@ -456,14 +475,6 @@ function clearAuthStorage() {
   window.localStorage.removeItem(SIS_IDLE_MINUTES_KEY);
 }
 
-function isAbsoluteSessionExpired() {
-  if (typeof window === 'undefined') return false;
-  const raw = window.localStorage.getItem(SIS_SESSION_EXPIRES_KEY);
-  if (!raw) return false;
-  const expiresAt = Date.parse(raw);
-  return Number.isFinite(expiresAt) && Date.now() >= expiresAt;
-}
-
 function isIdleSessionExpired() {
   if (typeof window === 'undefined') return false;
   const raw = window.localStorage.getItem(SIS_LAST_ACTIVITY_KEY);
@@ -473,11 +484,15 @@ function isIdleSessionExpired() {
   return Date.now() - lastActivityAt >= getStoredIdleTimeoutMs();
 }
 
+function isSessionExpiredByInactivity() {
+  return isIdleSessionExpired();
+}
+
 function readInitialAuthState() {
   if (typeof window === 'undefined') return { loggedIn: false };
   const token = window.localStorage.getItem(SIS_TOKEN_KEY);
   if (!token) return { loggedIn: false };
-  if (isAbsoluteSessionExpired() || isIdleSessionExpired()) {
+  if (isSessionExpiredByInactivity()) {
     clearAuthStorage();
     sessionStorage.setItem(SIS_LOGOUT_NOTICE_KEY, MSG.SESSION_EXPIRED);
     return { loggedIn: false };
@@ -523,8 +538,12 @@ function apiFetch(url, options = {}) {
   if (activeRole && SIS_ALLOWED_ROLES.includes(activeRole)) headers['X-SIS-ROLE'] = activeRole;
   return fetch(buildApiUrl(url), { ...options, headers }).then((res) => {
     if (res.status === 401 && typeof window !== 'undefined') {
-      clearAuthStorage();
-      if (window.__sisOnUnauthorized) window.__sisOnUnauthorized('expired');
+      if (document.hidden) {
+        window.__sisPendingUnauthorized = true;
+      } else {
+        clearAuthStorage();
+        if (window.__sisOnUnauthorized) window.__sisOnUnauthorized('expired');
+      }
     }
     if (res.status === 403 && typeof window !== 'undefined') {
       if (window.__sisOnForbidden) window.__sisOnForbidden();
@@ -856,7 +875,7 @@ const App = () => {
     };
 
     const checkIdleTimeout = () => {
-      if (isAbsoluteSessionExpired() || isIdleSessionExpired()) {
+      if (isSessionExpiredByInactivity()) {
         handleLogout('idle');
         return true;
       }
@@ -869,7 +888,13 @@ const App = () => {
     activityEvents.forEach((evt) => window.addEventListener(evt, touchActivity, { passive: true }));
     window.addEventListener('focus', touchActivity);
     const onVisibilityChange = () => {
-      if (!document.hidden && !checkIdleTimeout()) {
+      if (document.hidden) return;
+      if (window.__sisPendingUnauthorized) {
+        window.__sisPendingUnauthorized = false;
+        handleLogout('expired');
+        return;
+      }
+      if (!checkIdleTimeout()) {
         touchActivity();
       }
     };
@@ -1211,11 +1236,41 @@ const Dashboard = ({ role, lmsName }) => {
           <h2 className="text-xl font-bold text-gray-900">Dashboard</h2>
           <p className="text-sm text-gray-500">At-a-glance overview for administrators.</p>
         </div>
+        <div className="flex flex-wrap items-center gap-3">
         {(loading || statsLoading) && (
           <span className="text-xs font-medium text-gray-400">
             {loading ? 'Loading dashboard…' : 'Loading student counts…'}
           </span>
         )}
+        <button
+          type="button"
+          disabled={loading || statsLoading}
+          onClick={async () => {
+            setStatsLoading(true);
+            setError(null);
+            setChartReady(false);
+            clearOverviewCache();
+            try {
+              const metrics = await fetchOverviewMetrics(
+                '/api/moodle/overview-metrics?refresh=1&include_students=1'
+              );
+              applyOverviewMetrics(metrics, metricSetters);
+              writeOverviewCache(metrics);
+            } catch {
+              setMoodleOk(false);
+              setError(MSG.LOAD_DASHBOARD_REFRESH);
+            } finally {
+              setStatsLoading(false);
+              setLoading(false);
+            }
+          }}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-gray-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg border border-gray-200 disabled:opacity-50"
+          title="Fetch latest counts from Moodle (ignores cache)"
+        >
+          <RefreshCw size={14} className={statsLoading ? 'animate-spin' : ''} />
+          Refresh from Moodle
+        </button>
+        </div>
       </div>
 
       {error && <InlineStateMessage type="error">{error}</InlineStateMessage>}
@@ -3115,6 +3170,32 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
   const [studentSearch, setStudentSearch] = useState('');
   const [studentsRefreshing, setStudentsRefreshing] = useState(false);
 
+  const handleRefreshStudentsFromMoodle = () => {
+    if (isStudentScoped) return;
+    setStudentsRefreshing(true);
+    setError(null);
+    setMessage(null);
+    clearSiteStudentsCache();
+    apiFetch('/api/moodle/site-students?refresh=1')
+      .then((res) => (res.ok ? res.json() : Promise.reject(res)))
+      .then((data) => {
+        const list = data.students || [];
+        setStudents(list);
+        writeSiteStudentsCache(list, data.cached_at);
+        if (
+          selectedStudentId &&
+          !list.some((s) => String(s.id) === String(selectedStudentId))
+        ) {
+          setSelectedStudentId(list.length ? String(list[0].id) : '');
+          setGrades([]);
+        }
+        setPickerOpen(false);
+        setMessage(MSG.REFRESH_STUDENTS_SUCCESS);
+      })
+      .catch(() => setError(MSG.LOAD_STUDENTS_REFRESH))
+      .finally(() => setStudentsRefreshing(false));
+  };
+
   useEffect(() => {
     if (isStudentScoped) {
       setStudents([{ id: lockedMoodleUserId, fullname: 'My account' }]);
@@ -3283,11 +3364,25 @@ const AdminMoodleSync = ({ lockedMoodleUserId = null }) => {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-          <h4 className="font-bold mb-4 text-gray-800 flex items-center justify-between gap-2">
+          <h4 className="font-bold mb-4 text-gray-800 flex items-center justify-between gap-2 flex-wrap">
             <span>Students &amp; Fetch</span>
-            {studentsRefreshing && (
-              <span className="text-xs font-normal text-gray-400">Updating list…</span>
-            )}
+            <div className="flex items-center gap-2">
+              {studentsRefreshing && (
+                <span className="text-xs font-normal text-gray-400">Updating from Moodle…</span>
+              )}
+              {!isStudentScoped && (
+                <button
+                  type="button"
+                  onClick={handleRefreshStudentsFromMoodle}
+                  disabled={studentsRefreshing || loading}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-lg border border-indigo-200 disabled:opacity-50"
+                  title="Fetch latest student list from Moodle (ignores cache)"
+                >
+                  <RefreshCw size={13} className={studentsRefreshing ? 'animate-spin' : ''} />
+                  Refresh
+                </button>
+              )}
+            </div>
           </h4>
           {error && (
             <div className="mb-4">
