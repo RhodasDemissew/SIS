@@ -205,9 +205,12 @@ function prefetchOverviewMetrics() {
         return full;
       }
 
-      const partial = await fetchOverviewMetrics(fastUrl);
+      const partialP = fetchOverviewMetrics(fastUrl);
+      const fullP = fetchOverviewMetrics(fullUrl);
+
+      const partial = await partialP;
       writeOverviewCache(partial);
-      const full = await fetchOverviewMetrics(fullUrl);
+      const full = await fullP;
       writeOverviewCache(full);
       return full;
     })().finally(() => {
@@ -220,15 +223,19 @@ function prefetchOverviewMetrics() {
 
 let overviewRefreshPromise = null;
 
-/** Force-refresh dashboard metrics (two-phase, enrolment-only invalidation on server). */
+/** Force-refresh dashboard metrics: cached structure + parallel enrolment rebuild. */
 function refreshOverviewMetrics() {
   if (!overviewRefreshPromise) {
     overviewRefreshPromise = (async () => {
-      const fastUrl = '/api/moodle/overview-metrics?refresh=1&include_students=0';
+      const fastUrl = '/api/moodle/overview-metrics?include_students=0';
       const fullUrl = '/api/moodle/overview-metrics?refresh=1&include_students=1';
-      const partial = await fetchOverviewMetrics(fastUrl);
+
+      const partialP = fetchOverviewMetrics(fastUrl);
+      const fullP = fetchOverviewMetrics(fullUrl);
+
+      const partial = await partialP;
       writeOverviewCache(partial);
-      const full = await fetchOverviewMetrics(fullUrl);
+      const full = await fullP;
       writeOverviewCache(full);
       return full;
     })().finally(() => {
@@ -237,6 +244,13 @@ function refreshOverviewMetrics() {
   }
 
   return overviewRefreshPromise;
+}
+
+function resetDashboardStudentMetrics(setters) {
+  const { setTotalMoodleStudents, setStudentsByGrade, setChartReady } = setters;
+  setTotalMoodleStudents(null);
+  setStudentsByGrade({});
+  setChartReady(false);
 }
 
 function resetDashboardMetrics(setters) {
@@ -1296,20 +1310,28 @@ const Dashboard = ({ role, lmsName }) => {
           <button
             type="button"
             onClick={async () => {
-              setLoading(true);
               setStatsLoading(true);
               setError(null);
               setRefreshGeneration((g) => g + 1);
-              resetDashboardMetrics(metricSetters);
+
+              const cached = readOverviewCache();
+              if (cached) {
+                applyOverviewMetrics(cached, metricSetters);
+              }
+              resetDashboardStudentMetrics(metricSetters);
+              setLoading(false);
+
               try {
-                const partial = await fetchOverviewMetrics(
-                  '/api/moodle/overview-metrics?refresh=1&include_students=0'
-                );
+                const fastUrl = '/api/moodle/overview-metrics?include_students=0';
+                const fullUrl = '/api/moodle/overview-metrics?refresh=1&include_students=1';
+
+                const partialP = fetchOverviewMetrics(fastUrl);
+                const fullP = fetchOverviewMetrics(fullUrl);
+
+                const partial = await partialP;
                 applyOverviewMetrics(partial, metricSetters);
-                setLoading(false);
-                const full = await fetchOverviewMetrics(
-                  '/api/moodle/overview-metrics?refresh=1&include_students=1'
-                );
+
+                const full = await fullP;
                 applyOverviewMetrics(full, metricSetters);
                 writeOverviewCache(full);
               } catch {
