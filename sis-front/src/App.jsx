@@ -498,10 +498,21 @@ function readInitialAuthState() {
   return { loggedIn: true };
 }
 
-/** Shared nav labels & icons (same names for admin and student where purpose matches). */
+/** Shared nav labels, icons & URL paths (sidebar and address bar stay in sync). */
 const SIS_NAV = {
-  curriculum: { label: 'Browse Grades', icon: GraduationCap },
-  moodle: { label: 'Grade Reports', icon: BarChart3 },
+  dashboard: { label: 'Dashboard', icon: LayoutDashboard, path: 'dashboard' },
+  curriculum: { label: 'Browse Grades', icon: GraduationCap, path: 'browse-grades' },
+  moodle: { label: 'Grade Reports', icon: BarChart3, path: 'grade-reports' },
+};
+
+const PATH_TO_TAB = Object.fromEntries(
+  Object.entries(SIS_NAV).map(([id, nav]) => [nav.path, id])
+);
+
+/** Old bookmarked URLs → current paths */
+const LEGACY_ROUTE_REDIRECT = {
+  curriculum: `/${SIS_NAV.curriculum.path}`,
+  moodle: `/${SIS_NAV.moodle.path}`,
 };
 const LMS_NAME_FALLBACK = {
   ecamel: 'DNEC ECAMEL LMS',
@@ -703,7 +714,8 @@ const AppSidebarPanel = ({
       {menuItems[userRole].map((item) => (
         <NavLink
           key={item.id}
-          to={`/${item.id}`}
+          to={`/${item.path}`}
+          end
           onClick={onNavigate}
           className={({ isActive }) =>
             `w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all ${
@@ -773,8 +785,8 @@ const App = () => {
       null
     )
   );
-  const pathname = (location.pathname || '/').replace(/^\//, '') || 'dashboard';
-  const activeTab = pathname;
+  const pathname = (location.pathname || '/').replace(/^\//, '') || SIS_NAV.dashboard.path;
+  const activeTab = PATH_TO_TAB[pathname] ?? pathname;
   const [students, setStudents] = useState(INITIAL_STUDENTS);
   const [courses, setCourses] = useState(INITIAL_COURSES);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -893,14 +905,14 @@ const App = () => {
   const menuItems = useMemo(
     () => ({
       student: [
-        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-        { id: 'curriculum', label: SIS_NAV.curriculum.label, icon: SIS_NAV.curriculum.icon },
-        { id: 'moodle', label: SIS_NAV.moodle.label, icon: SIS_NAV.moodle.icon },
+        { id: 'dashboard', ...SIS_NAV.dashboard },
+        { id: 'curriculum', ...SIS_NAV.curriculum },
+        { id: 'moodle', ...SIS_NAV.moodle },
       ],
       admin: [
-        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-        { id: 'curriculum', label: SIS_NAV.curriculum.label, icon: SIS_NAV.curriculum.icon },
-        { id: 'moodle', label: SIS_NAV.moodle.label, icon: SIS_NAV.moodle.icon },
+        { id: 'dashboard', ...SIS_NAV.dashboard },
+        { id: 'curriculum', ...SIS_NAV.curriculum },
+        { id: 'moodle', ...SIS_NAV.moodle },
       ],
     }),
     []
@@ -972,7 +984,17 @@ const App = () => {
   }
 
   if (pathname === '' || pathname === 'login') {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={`/${SIS_NAV.dashboard.path}`} replace />;
+  }
+
+  const legacyRedirect = LEGACY_ROUTE_REDIRECT[pathname];
+  if (legacyRedirect) {
+    return <Navigate to={legacyRedirect} replace />;
+  }
+
+  const knownPaths = new Set(Object.values(SIS_NAV).map((nav) => nav.path));
+  if (!knownPaths.has(pathname)) {
+    return <Navigate to={`/${SIS_NAV.dashboard.path}`} replace />;
   }
 
   return (
