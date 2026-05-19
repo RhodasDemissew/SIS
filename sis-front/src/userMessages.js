@@ -12,7 +12,6 @@ export const MSG = {
   GENERIC_RETRY: 'Something went wrong. Please try again.',
 
   LOAD_DASHBOARD: "We couldn't load dashboard information. Please try again.",
-  LOAD_DASHBOARD_REFRESH: "Couldn't refresh the dashboard. Please try again.",
 
   CONNECTION_CHECKING: 'Checking connection…',
   CONNECTION_OK: 'Connected.',

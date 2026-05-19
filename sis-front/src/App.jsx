@@ -205,12 +205,9 @@ function prefetchOverviewMetrics() {
         return full;
       }
 
-      const partialP = fetchOverviewMetrics(fastUrl);
-      const fullP = fetchOverviewMetrics(fullUrl);
-
-      const partial = await partialP;
+      const partial = await fetchOverviewMetrics(fastUrl);
       writeOverviewCache(partial);
-      const full = await fullP;
+      const full = await fetchOverviewMetrics(fullUrl);
       writeOverviewCache(full);
       return full;
     })().finally(() => {
@@ -219,92 +216,6 @@ function prefetchOverviewMetrics() {
   }
 
   return overviewPrefetchPromise;
-}
-
-let overviewRefreshPromise = null;
-
-/** Force-refresh dashboard metrics: cached structure + parallel enrolment rebuild. */
-function refreshOverviewMetrics() {
-  if (!overviewRefreshPromise) {
-    overviewRefreshPromise = (async () => {
-      const fastUrl = '/api/moodle/overview-metrics?include_students=0';
-      const fullUrl = '/api/moodle/overview-metrics?refresh=1&include_students=1';
-
-      const partialP = fetchOverviewMetrics(fastUrl);
-      const fullP = fetchOverviewMetrics(fullUrl);
-
-      const partial = await partialP;
-      writeOverviewCache(partial);
-      const full = await fullP;
-      writeOverviewCache(full);
-      return full;
-    })().finally(() => {
-      overviewRefreshPromise = null;
-    });
-  }
-
-  return overviewRefreshPromise;
-}
-
-function resetDashboardStudentMetrics(setters) {
-  const { setTotalMoodleStudents, setStudentsByGrade, setChartReady } = setters;
-  setTotalMoodleStudents(null);
-  setStudentsByGrade({});
-  setChartReady(false);
-}
-
-function resetDashboardMetrics(setters) {
-  const {
-    setGradeLevels,
-    setTotalCourses,
-    setTotalMoodleStudents,
-    setStudentsByGrade,
-    setMoodleOk,
-    setChartReady,
-  } = setters;
-  setGradeLevels(null);
-  setTotalCourses(null);
-  setTotalMoodleStudents(null);
-  setStudentsByGrade({});
-  setMoodleOk(null);
-  setChartReady(false);
-}
-
-const COURSE_STUDENTS_CACHE_PREFIX = 'sis_course_students_';
-
-function courseStudentsCacheKey(courseId) {
-  const tenant =
-    typeof window !== 'undefined' ? window.localStorage.getItem(SIS_TENANT_KEY) || 'ecamel' : 'ecamel';
-  return `${COURSE_STUDENTS_CACHE_PREFIX}${tenant}_${courseId}`;
-}
-
-function readCourseStudentsCache(courseId) {
-  if (typeof window === 'undefined' || !courseId) return null;
-  try {
-    const raw = sessionStorage.getItem(courseStudentsCacheKey(courseId));
-    if (!raw) return null;
-    const data = JSON.parse(raw);
-    if (!Array.isArray(data?.students)) return null;
-    return data;
-  } catch {
-    return null;
-  }
-}
-
-function writeCourseStudentsCache(courseId, students, fetchedAt, partial = false) {
-  if (typeof window === 'undefined' || !courseId) return;
-  try {
-    sessionStorage.setItem(
-      courseStudentsCacheKey(courseId),
-      JSON.stringify({
-        students,
-        fetched_at: fetchedAt || new Date().toISOString(),
-        partial: !!partial,
-      })
-    );
-  } catch {
-    // ignore quota / private mode
-  }
 }
 
 function applyOverviewMetrics(metrics, setters) {
@@ -1161,7 +1072,6 @@ const App = () => {
 const Dashboard = ({ role, lmsName }) => {
   const [loading, setLoading] = useState(false);
   const [statsLoading, setStatsLoading] = useState(role === 'admin');
-  const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [error, setError] = useState(null);
   const [gradeLevels, setGradeLevels] = useState(null);
   const [totalCourses, setTotalCourses] = useState(null);
@@ -1301,53 +1211,11 @@ const Dashboard = ({ role, lmsName }) => {
           <h2 className="text-xl font-bold text-gray-900">Dashboard</h2>
           <p className="text-sm text-gray-500">At-a-glance overview for administrators.</p>
         </div>
-        <div className="flex items-center gap-3">
-          {(loading || statsLoading) && (
-            <span className="text-xs font-medium text-gray-400">
-              {loading ? 'Loading dashboard…' : 'Loading student counts…'}
-            </span>
-          )}
-          <button
-            type="button"
-            onClick={async () => {
-              setStatsLoading(true);
-              setError(null);
-              setRefreshGeneration((g) => g + 1);
-
-              const cached = readOverviewCache();
-              if (cached) {
-                applyOverviewMetrics(cached, metricSetters);
-              }
-              resetDashboardStudentMetrics(metricSetters);
-              setLoading(false);
-
-              try {
-                const fastUrl = '/api/moodle/overview-metrics?include_students=0';
-                const fullUrl = '/api/moodle/overview-metrics?refresh=1&include_students=1';
-
-                const partialP = fetchOverviewMetrics(fastUrl);
-                const fullP = fetchOverviewMetrics(fullUrl);
-
-                const partial = await partialP;
-                applyOverviewMetrics(partial, metricSetters);
-
-                const full = await fullP;
-                applyOverviewMetrics(full, metricSetters);
-                writeOverviewCache(full);
-              } catch {
-                setMoodleOk(false);
-                setError(MSG.LOAD_DASHBOARD_REFRESH);
-              } finally {
-                setLoading(false);
-                setStatsLoading(false);
-              }
-            }}
-            disabled={loading || statsLoading}
-            className="px-3 py-1.5 text-xs font-semibold text-gray-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg border border-gray-200 disabled:opacity-50"
-          >
-            Refresh
-          </button>
-        </div>
+        {(loading || statsLoading) && (
+          <span className="text-xs font-medium text-gray-400">
+            {loading ? 'Loading dashboard…' : 'Loading student counts…'}
+          </span>
+        )}
       </div>
 
       {error && <InlineStateMessage type="error">{error}</InlineStateMessage>}
@@ -1363,17 +1231,12 @@ const Dashboard = ({ role, lmsName }) => {
             </div>
           </div>
           <h3 className="text-gray-500 text-sm font-medium">Total grade levels</h3>
-          {(loading || statsLoading) && gradeLevels == null ? (
-            <div className="mt-1 h-8 w-16 rounded-lg bg-gray-100 animate-pulse" aria-label="Loading grade levels" />
-          ) : (
-            <AnimatedStatNumber
-              key={`gradeLevels-${refreshGeneration}`}
-              value={gradeLevels}
-              className="text-2xl font-bold text-gray-900 mt-1 tabular-nums"
-              duration={850}
-              delay={80}
-            />
-          )}
+          <AnimatedStatNumber
+            value={gradeLevels}
+            className="text-2xl font-bold text-gray-900 mt-1 tabular-nums"
+            duration={850}
+            delay={80}
+          />
         </div>
 
         <div
@@ -1386,17 +1249,12 @@ const Dashboard = ({ role, lmsName }) => {
             </div>
           </div>
           <h3 className="text-gray-500 text-sm font-medium">Total courses</h3>
-          {(loading || statsLoading) && totalCourses == null ? (
-            <div className="mt-1 h-8 w-16 rounded-lg bg-gray-100 animate-pulse" aria-label="Loading course count" />
-          ) : (
-            <AnimatedStatNumber
-              key={`totalCourses-${refreshGeneration}`}
-              value={totalCourses}
-              className="text-2xl font-bold text-gray-900 mt-1 tabular-nums"
-              duration={850}
-              delay={160}
-            />
-          )}
+          <AnimatedStatNumber
+            value={totalCourses}
+            className="text-2xl font-bold text-gray-900 mt-1 tabular-nums"
+            duration={850}
+            delay={160}
+          />
           <p className="text-[11px] text-gray-400 mt-1">Across all grade levels.</p>
         </div>
 
@@ -1414,7 +1272,6 @@ const Dashboard = ({ role, lmsName }) => {
             <div className="mt-1 h-8 w-16 rounded-lg bg-gray-100 animate-pulse" aria-label="Loading student count" />
           ) : (
             <AnimatedStatNumber
-              key={`totalMoodleStudents-${refreshGeneration}`}
               value={totalMoodleStudents}
               className="text-2xl font-bold text-gray-900 mt-1 tabular-nums"
               duration={900}
@@ -1713,7 +1570,6 @@ const CurriculumModule = () => {
   const [selectedCourse, setSelectedCourse] = useState(null);
 
   const [loadingStudents, setLoadingStudents] = useState(false);
-  const [loadingGrades, setLoadingGrades] = useState(false);
   const [studentError, setStudentError] = useState(null);
   const [courseStudents, setCourseStudents] = useState([]);
   const [studentsFetchedAt, setStudentsFetchedAt] = useState(null);
@@ -1780,82 +1636,34 @@ const CurriculumModule = () => {
   }, [selectedCategoryId]);
 
   const loadCourseStudents = async (course, opts = {}) => {
-    if (!course?.id) return;
-
     setSelectedCourse(course);
+    setLoadingStudents(true);
     setStudentError(null);
+    setCourseStudents([]);
+    setStudentsFetchedAt(null);
     setCompareSelected({});
     setDetailCourse(null);
     setDetailItems([]);
     setDetailError(null);
-    setStudentsPage(1);
-
-    const refresh = !!opts.refresh;
-    const cached = !refresh ? readCourseStudentsCache(course.id) : null;
-    if (cached) {
-      setCourseStudents(cached.students);
-      setStudentsFetchedAt(cached.fetched_at || null);
-      if (!cached.partial) {
-        setLoadingStudents(false);
-        setLoadingGrades(false);
-        return;
-      }
-    } else {
-      setCourseStudents([]);
-      setStudentsFetchedAt(null);
-    }
-
-    setLoadingStudents(!cached);
-    setLoadingGrades(true);
-
-    const refreshQs = refresh ? '&refresh=1' : '';
-    let rosterList = cached ? cached.students : [];
-
     try {
-      if (!cached) {
-        const rosterRes = await apiFetch(
-          `/api/moodle/course-students/${course.id}?include_grades=0${refreshQs}`
-        );
-        const rosterData = await rosterRes.json().catch(() => ({}));
-        if (!rosterRes.ok) {
-          setStudentError(
-            rosterRes.status ? messageForHttpStatus(rosterRes.status) : MSG.LOAD_COURSE_STUDENTS
-          );
-          setLoadingStudents(false);
-          setLoadingGrades(false);
-          return;
-        }
-
-        rosterList = Array.isArray(rosterData.students) ? rosterData.students : [];
-        setCourseStudents(rosterList);
-        setStudentsFetchedAt(rosterData.fetched_at || null);
-        writeCourseStudentsCache(course.id, rosterList, rosterData.fetched_at, true);
-        setLoadingStudents(false);
-      } else {
-        setLoadingStudents(false);
-      }
-
-      const gradesRes = await apiFetch(
-        `/api/moodle/course-students/${course.id}?include_grades=1${refreshQs}`
-      );
-      const gradesData = await gradesRes.json().catch(() => ({}));
-      if (!gradesRes.ok) {
+      const refresh = !!opts.refresh;
+      const url = refresh
+        ? `/api/moodle/course-students/${course.id}?refresh=1`
+        : `/api/moodle/course-students/${course.id}`;
+      const res = await apiFetch(url);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
         setStudentError(
-          gradesRes.status ? messageForHttpStatus(gradesRes.status) : MSG.LOAD_COURSE_STUDENTS
+          res.status ? messageForHttpStatus(res.status) : MSG.LOAD_COURSE_STUDENTS
         );
-        setLoadingGrades(false);
         return;
       }
-
-      const fullList = Array.isArray(gradesData.students) ? gradesData.students : rosterList;
-      setCourseStudents(fullList);
-      setStudentsFetchedAt(gradesData.fetched_at || rosterData.fetched_at || null);
-      writeCourseStudentsCache(course.id, fullList, gradesData.fetched_at, false);
+      setCourseStudents(Array.isArray(data.students) ? data.students : []);
+      setStudentsFetchedAt(data.fetched_at || null);
     } catch {
       setStudentError(MSG.LOAD_COURSE_STUDENTS);
     } finally {
       setLoadingStudents(false);
-      setLoadingGrades(false);
     }
   };
 
@@ -2091,13 +1899,10 @@ const CurriculumModule = () => {
               </h4>
               {selectedCourse && (
                 <p className="text-xs text-gray-500 mt-1">
-                  Students: {studentCount}
-                  {loadingGrades && avgPct == null && studentCount > 0 && (
-                    <span className="text-indigo-500"> • Loading grades…</span>
-                  )}
-                  {avgPct != null && ` • Course average: ${avgPct.toFixed(1)}%`}{' '}
-                  {maxPct != null && ` • Highest: ${maxPct.toFixed(1)}%`}{' '}
-                  {minPct != null && ` • Lowest: ${minPct.toFixed(1)}%`}
+                  Students: {studentCount}{' '}
+                  {avgPct != null && `• Course average: ${avgPct.toFixed(1)}%`}{' '}
+                  {maxPct != null && `• Highest: ${maxPct.toFixed(1)}%`}{' '}
+                  {minPct != null && `• Lowest: ${minPct.toFixed(1)}%`}
                 </p>
               )}
             </div>
@@ -2117,17 +1922,14 @@ const CurriculumModule = () => {
                 <button
                   type="button"
                   onClick={() => loadCourseStudents(selectedCourse, { refresh: true })}
-                  disabled={loadingStudents || loadingGrades}
+                  disabled={loadingStudents}
                   className="px-2 py-1.5 text-xs font-semibold text-gray-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg border border-gray-200 disabled:opacity-50 disabled:pointer-events-none"
                   title="Refresh grades"
                 >
                   Refresh
                 </button>
               )}
-              {loadingStudents && <span className="text-xs text-gray-400">Loading students…</span>}
-              {!loadingStudents && loadingGrades && (
-                <span className="text-xs text-gray-400">Loading grades…</span>
-              )}
+              {loadingStudents && <span className="text-xs text-gray-400">Loading…</span>}
               {courseStudents.length > 0 && selectedCourse && (
                 <button
                   type="button"
@@ -2153,8 +1955,6 @@ const CurriculumModule = () => {
             <InlineStateMessage>{MSG.VALIDATION_SELECT_COURSE}</InlineStateMessage>
           ) : studentError ? (
             <InlineStateMessage type="error">{studentError}</InlineStateMessage>
-          ) : loadingStudents && courseStudents.length === 0 ? (
-            <InlineStateMessage>Loading students…</InlineStateMessage>
           ) : courseStudents.length === 0 ? (
             <InlineStateMessage>{MSG.EMPTY_NO_STUDENTS_COURSE}</InlineStateMessage>
           ) : (

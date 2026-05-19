@@ -63,26 +63,10 @@ class MoodleController extends Controller
      */
     private function forgetSiteCaches(): void
     {
-        $this->forgetStructureCachesOnly();
-        $this->forgetEnrolmentCachesOnly();
+        Cache::forget($this->moodleCacheKey('site_structure'));
+        Cache::forget($this->moodleCacheKey('site_enrolment_data'));
         Cache::forget($this->moodleCacheKey('site_students'));
         Cache::forget($this->moodleCacheKey('overview_metrics'));
-    }
-
-    private function forgetStructureCachesOnly(): void
-    {
-        Cache::forget($this->moodleCacheKey('site_structure'));
-    }
-
-    private function forgetEnrolmentCachesOnly(): void
-    {
-        Cache::forget($this->moodleCacheKey('site_enrolment_data'));
-    }
-
-    private function forgetCourseCaches(int $courseIdInt): void
-    {
-        Cache::forget($this->moodleCacheKey('course_roster_'.$courseIdInt));
-        Cache::forget($this->moodleCacheKey('course_students_'.$courseIdInt));
     }
 
     /**
@@ -101,7 +85,7 @@ class MoodleController extends Controller
         $cacheKey = $this->moodleCacheKey('site_structure');
 
         if ($forceRefresh) {
-            $this->forgetStructureCachesOnly();
+            $this->forgetSiteCaches();
         }
 
         $cached = Cache::get($cacheKey);
@@ -217,7 +201,7 @@ class MoodleController extends Controller
         $cacheKey = $this->moodleCacheKey('site_enrolment_data');
 
         if ($forceRefresh) {
-            $this->forgetEnrolmentCachesOnly();
+            $this->forgetSiteCaches();
         }
 
         $cached = Cache::get($cacheKey);
@@ -521,194 +505,6 @@ class MoodleController extends Controller
     }
 
     /**
-     * @param  array<int, array<string, mixed>>  $students
-     * @return array<int, array<string, mixed>>
-     */
-    private function sortCourseStudentsByPercentage(array $students): array
-    {
-        usort($students, function (array $a, array $b) {
-            $pa = $a['course_total_percentage'] ?? null;
-            $pb = $b['course_total_percentage'] ?? null;
-            if ($pa === $pb) {
-                return strcmp((string) ($a['fullname'] ?? ''), (string) ($b['fullname'] ?? ''));
-            }
-            if ($pa === null) {
-                return 1;
-            }
-            if ($pb === null) {
-                return -1;
-            }
-
-            return $pb <=> $pa;
-        });
-
-        return $students;
-    }
-
-    /**
-     * @return array{
-     *   course_id: int,
-     *   fetched_at: string,
-     *   students: array<int, array<string, mixed>>
-     * }|null
-     */
-    private function buildCourseRoster(int $courseIdInt): ?array
-    {
-        $users = $this->moodle->getEnrolledUsers($courseIdInt);
-        if ($users === null) {
-            return null;
-        }
-
-        $students = [];
-        foreach ($users as $u) {
-            if (! is_array($u) || ! isset($u['id'])) {
-                continue;
-            }
-            $moodleUserId = (int) $u['id'];
-            $email = (string) ($u['email'] ?? '');
-            $fullname = trim((string) (($u['fullname'] ?? '') ?: (($u['firstname'] ?? '').' '.($u['lastname'] ?? ''))));
-
-            $students[] = [
-                'moodle_user_id' => $moodleUserId,
-                'fullname' => $fullname !== '' ? $fullname : ('User '.$moodleUserId),
-                'email' => $email,
-                'course_total_percentage' => null,
-            ];
-        }
-
-        usort($students, fn (array $a, array $b) => strcmp((string) ($a['fullname'] ?? ''), (string) ($b['fullname'] ?? '')));
-
-        return [
-            'course_id' => $courseIdInt,
-            'fetched_at' => now()->toIso8601String(),
-            'students' => $students,
-        ];
-    }
-
-    /**
-     * @param  array<int, array<string, mixed>>  $rosterStudents
-     * @return array<int, array<string, mixed>>
-     */
-    private function attachGradesToCourseRoster(int $courseIdInt, array $rosterStudents): array
-    {
-        $userIds = array_values(array_map(
-            static fn (array $s): int => (int) ($s['moodle_user_id'] ?? 0),
-            $rosterStudents
-        ));
-        $userIds = array_values(array_filter($userIds, static fn (int $id): bool => $id > 0));
-
-        if (count($userIds) === 0) {
-            return $rosterStudents;
-        }
-
-        $tablesByUserId = $this->moodle->getGradesTablesForUsers($courseIdInt, $userIds);
-
-        $students = [];
-        foreach ($rosterStudents as $row) {
-            $moodleUserId = (int) ($row['moodle_user_id'] ?? 0);
-            $percentage = null;
-            $table = $tablesByUserId[$moodleUserId] ?? null;
-            if (is_array($table)) {
-                $percentage = self::extractCourseTotalPercentage($table);
-            }
-
-            $students[] = [
-                'moodle_user_id' => $moodleUserId,
-                'fullname' => (string) ($row['fullname'] ?? ''),
-                'email' => (string) ($row['email'] ?? ''),
-                'course_total_percentage' => $percentage,
-            ];
-        }
-
-        return $this->sortCourseStudentsByPercentage($students);
-    }
-
-    /**
-     * @return array{
-     *   course_id: int,
-     *   fetched_at: string,
-     *   students: array<int, array<string, mixed>>
-     * }|null
-     */
-    private function rememberCourseRoster(int $courseIdInt): ?array
-    {
-        $cacheKey = $this->moodleCacheKey('course_roster_'.$courseIdInt);
-        $cached = Cache::get($cacheKey);
-        if (is_array($cached)) {
-            return $cached;
-        }
-
-        $lockKey = $this->moodleCacheKey('course_roster_lock_'.$courseIdInt);
-
-        try {
-            return Cache::lock($lockKey, 120)->block(120, function () use ($cacheKey, $courseIdInt) {
-                $cached = Cache::get($cacheKey);
-                if (is_array($cached)) {
-                    return $cached;
-                }
-
-                $built = $this->buildCourseRoster($courseIdInt);
-                if ($built !== null) {
-                    Cache::put($cacheKey, $built, now()->addMinutes(10));
-                }
-
-                return $built;
-            });
-        } catch (\Illuminate\Contracts\Cache\LockTimeoutException) {
-            return Cache::get($cacheKey);
-        }
-    }
-
-    /**
-     * @return array{
-     *   course_id: int,
-     *   fetched_at: string,
-     *   students: array<int, array<string, mixed>>
-     * }|null
-     */
-    private function rememberCourseStudentsWithGrades(int $courseIdInt): ?array
-    {
-        $cacheKey = $this->moodleCacheKey('course_students_'.$courseIdInt);
-        $cached = Cache::get($cacheKey);
-        if (is_array($cached)) {
-            return $cached;
-        }
-
-        $lockKey = $this->moodleCacheKey('course_students_lock_'.$courseIdInt);
-
-        try {
-            return Cache::lock($lockKey, 120)->block(120, function () use ($cacheKey, $courseIdInt) {
-                $cached = Cache::get($cacheKey);
-                if (is_array($cached)) {
-                    return $cached;
-                }
-
-                $roster = $this->rememberCourseRoster($courseIdInt);
-                if ($roster === null) {
-                    return null;
-                }
-
-                $students = $this->attachGradesToCourseRoster(
-                    $courseIdInt,
-                    is_array($roster['students'] ?? null) ? $roster['students'] : []
-                );
-
-                $built = [
-                    'course_id' => $courseIdInt,
-                    'fetched_at' => now()->toIso8601String(),
-                    'students' => $students,
-                ];
-
-                Cache::put($cacheKey, $built, now()->addMinutes(5));
-
-                return $built;
-            });
-        } catch (\Illuminate\Contracts\Cache\LockTimeoutException) {
-            return Cache::get($cacheKey);
-        }
-    }
-
-    /**
      * List enrolled users for a Moodle course, plus course total percentage.
      */
     public function courseStudents(Request $request, string $courseId): JsonResponse
@@ -721,29 +517,80 @@ class MoodleController extends Controller
         }
 
         $courseIdInt = (int) $courseId;
+
         $forceRefresh = $this->canForceRefresh($request);
-        $includeGrades = $request->boolean('include_grades', true);
+
+        // Cache the transformed list for a short period to speed up repeated requests.
+        $cacheKey = $this->moodleCacheKey('course_students_'.$courseIdInt);
 
         if ($forceRefresh) {
-            $this->forgetCourseCaches($courseIdInt);
+            Cache::forget($cacheKey);
         }
 
-        if (! $includeGrades) {
-            $payload = $this->rememberCourseRoster($courseIdInt);
-            if ($payload === null) {
-                return response()->json(['message' => 'Could not fetch enrolled users for this course'], 502);
+        // NOTE: This endpoint can be slow because Moodle grades are fetched per student.
+        // We use short TTL + parallel fetching to keep it responsive while staying fresh.
+        $payload = Cache::remember($cacheKey, now()->addMinutes(5), function () use ($courseIdInt) {
+            $users = $this->moodle->getEnrolledUsers($courseIdInt);
+            if ($users === null) {
+                return null;
             }
 
-            return response()->json(array_merge($payload, ['partial' => true]));
-        }
+            $rawUsers = [];
+            $userIds = [];
+            foreach ($users as $u) {
+                if (! is_array($u) || ! isset($u['id'])) {
+                    continue;
+                }
+                $uid = (int) $u['id'];
+                $rawUsers[$uid] = $u;
+                $userIds[] = $uid;
+            }
 
-        $payload = $this->rememberCourseStudentsWithGrades($courseIdInt);
+            $tablesByUserId = $this->moodle->getGradesTablesForUsers($courseIdInt, $userIds);
+
+            $students = [];
+            foreach ($rawUsers as $moodleUserId => $u) {
+                $email = (string) ($u['email'] ?? '');
+                $fullname = trim((string) (($u['fullname'] ?? '') ?: (($u['firstname'] ?? '').' '.($u['lastname'] ?? ''))));
+
+                $percentage = null;
+                $table = $tablesByUserId[$moodleUserId] ?? null;
+                if (is_array($table)) {
+                    $percentage = self::extractCourseTotalPercentage($table);
+                }
+
+                $students[] = [
+                    'moodle_user_id' => (int) $moodleUserId,
+                    'fullname' => $fullname !== '' ? $fullname : ('User '.$moodleUserId),
+                    'email' => $email,
+                    'course_total_percentage' => $percentage,
+                ];
+            }
+
+            // Sort: highest % first, then name.
+            usort($students, function (array $a, array $b) {
+                $pa = $a['course_total_percentage'];
+                $pb = $b['course_total_percentage'];
+                if ($pa === $pb) {
+                    return strcmp((string) $a['fullname'], (string) $b['fullname']);
+                }
+                if ($pa === null) return 1;
+                if ($pb === null) return -1;
+                return $pb <=> $pa;
+            });
+
+            return [
+                'course_id' => $courseIdInt,
+                'fetched_at' => now()->toIso8601String(),
+                'students' => $students,
+            ];
+        });
 
         if ($payload === null) {
             return response()->json(['message' => 'Could not fetch enrolled users for this course'], 502);
         }
 
-        return response()->json(array_merge($payload, ['partial' => false]));
+        return response()->json($payload);
     }
 
     /**
