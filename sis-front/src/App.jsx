@@ -577,7 +577,11 @@ const LandingLogin = ({ onLogin }) => {
   const [tenant, setTenant] = useState(() =>
     typeof window !== 'undefined' ? window.localStorage.getItem(SIS_TENANT_KEY) || 'ecamel' : 'ecamel'
   );
-  const [tenants, setTenants] = useState([]);
+  const [tenants, setTenants] = useState(() => {
+    const initialTenant =
+      typeof window !== 'undefined' ? window.localStorage.getItem(SIS_TENANT_KEY) || 'ecamel' : 'ecamel';
+    return [{ id: initialTenant, label: resolveLmsName(initialTenant) }];
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   useEffect(() => {
@@ -585,12 +589,14 @@ const LandingLogin = ({ onLogin }) => {
       .then((r) => r.json())
       .then((data) => {
         const list = Array.isArray(data.tenants) ? data.tenants : [];
-        setTenants(list);
+        setTenants(list.length ? list : [{ id: tenant, label: resolveLmsName(tenant) }]);
         if (list.length > 0 && !list.some((t) => t.id === tenant)) {
           setTenant(data.default_tenant || list[0].id);
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        setTenants((prev) => (prev.length ? prev : [{ id: tenant, label: resolveLmsName(tenant) }]));
+      });
   }, []);
 
   const handleSubmit = async (e) => {
@@ -642,24 +648,22 @@ const LandingLogin = ({ onLogin }) => {
             {error && (
               <p className="text-red-600 bg-red-50 border border-red-100 rounded-xl px-4 py-2 text-sm">{error}</p>
             )}
-            {tenants.length > 1 && (
-              <div>
-                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
-                  LMS site
-                </label>
-                <select
-                  value={tenant}
-                  onChange={(e) => setTenant(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                >
-                  {tenants.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+            <div>
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">
+                LMS site
+              </label>
+              <select
+                value={tenant}
+                onChange={(e) => setTenant(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm bg-gray-50 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+              >
+                {tenants.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div>
               <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Username</label>
               <input
