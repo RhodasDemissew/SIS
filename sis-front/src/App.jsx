@@ -1897,8 +1897,8 @@ const CurriculumModule = () => {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 lg:col-span-3">
           <div className="flex items-center justify-between mb-3">
             <h4 className="font-bold text-gray-800">1) Select Grade/Level</h4>
             {loadingCats && <span className="text-xs text-gray-400">Loading…</span>}
@@ -1921,7 +1921,7 @@ const CurriculumModule = () => {
           )}
         </div>
 
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 lg:col-span-3">
           <div className="flex items-center justify-between mb-3">
             <h4 className="font-bold text-gray-800">2) Select Course</h4>
             {loadingCourses && <span className="text-xs text-gray-400">Loading…</span>}
@@ -1952,65 +1952,91 @@ const CurriculumModule = () => {
           )}
         </div>
 
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <h4 className="font-bold text-gray-800">
-                3) Students &amp; Grades {selectedCourse ? `• ${selectedCourse.fullname || selectedCourse.shortname || `Course ${selectedCourse.id}`}` : ''}
-              </h4>
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 min-w-0 overflow-hidden lg:col-span-6">
+          <div className="space-y-4 mb-4">
+            <div className="min-w-0">
+              <h4 className="font-bold text-gray-800 text-sm sm:text-base">3) Students &amp; Grades</h4>
               {selectedCourse && (
-                <p className="text-xs text-gray-500 mt-1">
-                  Students: {studentCount}{' '}
-                  {avgPct != null && `• Course average: ${avgPct.toFixed(1)}%`}{' '}
-                  {maxPct != null && `• Highest: ${maxPct.toFixed(1)}%`}{' '}
-                  {minPct != null && `• Lowest: ${minPct.toFixed(1)}%`}
-                </p>
+                <>
+                  <p className="mt-1.5 text-sm font-semibold text-gray-800 break-words leading-snug">
+                    {selectedCourse.fullname || selectedCourse.shortname || `Course ${selectedCourse.id}`}
+                  </p>
+                  <dl className="mt-2 flex flex-wrap gap-2">
+                    <div className="rounded-lg bg-gray-50 border border-gray-100 px-2.5 py-1 text-xs text-gray-600">
+                      <dt className="sr-only">Students</dt>
+                      <dd>
+                        <span className="font-semibold text-gray-800">{studentCount}</span> students
+                      </dd>
+                    </div>
+                    {avgPct != null && (
+                      <div className="rounded-lg bg-gray-50 border border-gray-100 px-2.5 py-1 text-xs text-gray-600">
+                        <dt className="sr-only">Course average</dt>
+                        <dd>
+                          Avg <span className="font-semibold text-gray-800">{avgPct.toFixed(1)}%</span>
+                        </dd>
+                      </div>
+                    )}
+                    {maxPct != null && (
+                      <div className="rounded-lg bg-gray-50 border border-gray-100 px-2.5 py-1 text-xs text-gray-600">
+                        <dt className="sr-only">Highest</dt>
+                        <dd>
+                          High <span className="font-semibold text-gray-800">{maxPct.toFixed(1)}%</span>
+                        </dd>
+                      </div>
+                    )}
+                    {minPct != null && (
+                      <div className="rounded-lg bg-gray-50 border border-gray-100 px-2.5 py-1 text-xs text-gray-600">
+                        <dt className="sr-only">Lowest</dt>
+                        <dd>
+                          Low <span className="font-semibold text-gray-800">{minPct.toFixed(1)}%</span>
+                        </dd>
+                      </div>
+                    )}
+                  </dl>
+                </>
               )}
             </div>
-            <div className="flex items-center gap-3">
-              {selectedCourse && (
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={studentSearch}
-                    onChange={(e) => setStudentSearch(e.target.value)}
-                    placeholder="Search name or email..."
-                    className="pl-3 pr-3 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-gray-50 focus:bg-white"
-                  />
+            {selectedCourse && (
+              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center w-full min-w-0">
+                <input
+                  type="text"
+                  value={studentSearch}
+                  onChange={(e) => setStudentSearch(e.target.value)}
+                  placeholder="Search name or email..."
+                  className="w-full min-w-0 sm:flex-1 sm:min-w-[12rem] px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-gray-50 focus:bg-white"
+                />
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => loadCourseStudents(selectedCourse, { refresh: true })}
+                    disabled={loadingStudents}
+                    className="px-3 py-2 text-xs font-semibold text-gray-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg border border-gray-200 disabled:opacity-50 disabled:pointer-events-none whitespace-nowrap"
+                    title="Refresh grades"
+                  >
+                    Refresh
+                  </button>
+                  {loadingStudents && <span className="text-xs text-gray-400 whitespace-nowrap">Loading…</span>}
+                  {courseStudents.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const courseName = selectedCourse.fullname || selectedCourse.shortname || `course-${selectedCourse.id}`;
+                        const rows = courseStudents.map((s) => ({
+                          Name: s.fullname ?? '',
+                          Email: s.email ?? '',
+                          'Course Total %': s.course_total_percentage != null ? s.course_total_percentage : '',
+                        }));
+                        downloadCsv(`course-${selectedCourse.id}-grades.csv`, rows);
+                      }}
+                      className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-lg border border-indigo-200 whitespace-nowrap"
+                    >
+                      <Download size={14} className="shrink-0" />
+                      Export CSV
+                    </button>
+                  )}
                 </div>
-              )}
-              {selectedCourse && (
-                <button
-                  type="button"
-                  onClick={() => loadCourseStudents(selectedCourse, { refresh: true })}
-                  disabled={loadingStudents}
-                  className="px-2 py-1.5 text-xs font-semibold text-gray-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg border border-gray-200 disabled:opacity-50 disabled:pointer-events-none"
-                  title="Refresh grades"
-                >
-                  Refresh
-                </button>
-              )}
-              {loadingStudents && <span className="text-xs text-gray-400">Loading…</span>}
-              {courseStudents.length > 0 && selectedCourse && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const courseName = selectedCourse.fullname || selectedCourse.shortname || `course-${selectedCourse.id}`;
-                    const rows = courseStudents.map((s) => ({
-                      Name: s.fullname ?? '',
-                      Email: s.email ?? '',
-                      'Course Total %': s.course_total_percentage != null ? s.course_total_percentage : '',
-                    }));
-                    const safeName = courseName.replace(/[^\w\s-]/g, '');
-                    downloadCsv(`course-${selectedCourse.id}-grades.csv`, rows);
-                  }}
-                  className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded-lg border border-indigo-200"
-                >
-                  <Download size={14} />
-                  Export CSV
-                </button>
-              )}
-            </div>
+              </div>
+            )}
           </div>
           {!selectedCourse ? (
             <InlineStateMessage>{MSG.VALIDATION_SELECT_COURSE}</InlineStateMessage>
@@ -2019,26 +2045,25 @@ const CurriculumModule = () => {
           ) : courseStudents.length === 0 ? (
             <InlineStateMessage>{MSG.EMPTY_NO_STUDENTS_COURSE}</InlineStateMessage>
           ) : (
-            <div className="space-y-3">
-              <div className="hidden sm:flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-gray-400 border-b pb-2">
-                <div className="flex-1 flex items-center gap-3 min-w-0">
+            <div className="space-y-3 min-w-0">
+              <div className="hidden sm:grid sm:grid-cols-[minmax(0,1fr)_auto] gap-2 items-center text-[10px] font-bold uppercase tracking-widest text-gray-400 border-b pb-2 min-w-0">
+                <div className="flex items-center gap-3 min-w-0">
                   <span className="w-6 text-center shrink-0">#</span>
-                  <span className="flex-1">Student Name</span>
-                  <span className="w-40 hidden md:inline">Email</span>
+                  <span className="min-w-0 truncate">Student Name</span>
                 </div>
-                <div className="flex items-center gap-4 pr-1 shrink-0">
+                <div className="flex items-center gap-3 shrink-0 justify-end">
                   <button
                     type="button"
                     onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
-                    className="flex items-center gap-1 text-gray-500 hover:text-indigo-600"
+                    className="flex items-center gap-1 text-gray-500 hover:text-indigo-600 whitespace-nowrap"
                   >
                     <span>Course Total %</span>
                     <span>{sortDir === 'desc' ? '↓' : '↑'}</span>
                   </button>
-                  <span className="w-16 text-right">Action</span>
+                  <span className="text-right whitespace-nowrap">Action</span>
                 </div>
               </div>
-              <div className="space-y-1 max-h-[45vh] overflow-y-auto pr-1">
+              <div className="space-y-1 max-h-[45vh] overflow-y-auto overflow-x-hidden pr-1 min-w-0">
                 {pagedSortedStudents.map((s, idx) => (
                   <div
                     key={`${s.moodle_user_id}-${idx}`}
@@ -2082,11 +2107,11 @@ const CurriculumModule = () => {
                 ))}
               </div>
               {sortedStudents.length > studentsPageSize && (
-                <div className="flex items-center justify-between pt-2">
-                  <p className="text-xs text-gray-500">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between pt-2 min-w-0">
+                  <p className="text-xs text-gray-500 min-w-0">
                     Showing {(studentsPage - 1) * studentsPageSize + 1} - {Math.min(studentsPage * studentsPageSize, sortedStudents.length)} of {sortedStudents.length}
                   </p>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
                     <button
                       type="button"
                       onClick={() => setStudentsPage((p) => Math.max(1, p - 1))}
