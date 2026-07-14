@@ -106,6 +106,39 @@ class MoodleService
     }
 
     /**
+     * Site info for the user who owns $userToken (includes userissiteadmin when Moodle supports it).
+     * Requires core_webservice_get_site_info on the login external service.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function getSiteInfoForUserToken(string $userToken): ?array
+    {
+        if ($this->baseUrl === '' || $userToken === '') {
+            return null;
+        }
+
+        $url = $this->baseUrl.'/webservice/rest/server.php';
+        $response = Http::connectTimeout($this->connectTimeoutSeconds)
+            ->timeout($this->timeoutSeconds)
+            ->get($url, [
+                'wstoken' => $userToken,
+                'wsfunction' => 'core_webservice_get_site_info',
+                'moodlewsrestformat' => 'json',
+            ]);
+
+        if (! $response->successful()) {
+            return null;
+        }
+
+        $body = $response->json();
+        if (! is_array($body) || isset($body['exception'])) {
+            return null;
+        }
+
+        return $body;
+    }
+
+    /**
      * Call a Moodle web service function.
      *
      * @param  array<string, mixed>  $params
