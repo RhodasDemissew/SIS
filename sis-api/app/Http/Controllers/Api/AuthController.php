@@ -112,9 +112,16 @@ class AuthController extends Controller
             ($email !== '' && in_array(strtolower($email), $adminEmailsLc, true)) ||
             in_array('admin', $existingRoles, true);
 
+        // Moodle site administrators are not course roles; detect via the user's login token.
+        $isMoodleSiteAdmin = false;
+        $siteInfo = $this->moodle->getSiteInfoForUserToken((string) $auth['token']);
+        if (is_array($siteInfo) && array_key_exists('userissiteadmin', $siteInfo)) {
+            $isMoodleSiteAdmin = filter_var($siteInfo['userissiteadmin'], FILTER_VALIDATE_BOOLEAN);
+        }
+
         // Role scan hits many courses; skip when admin is already known (keeps login fast).
         $moodleRoleShortnames = [];
-        if (! $isAdminByConfig) {
+        if (! $isAdminByConfig && ! $isMoodleSiteAdmin) {
             $moodleRoleShortnames = Cache::remember(
                 "auth:moodle-user-role-shortnames:{$tenant}:{$moodleUserId}",
                 now()->addMinutes(10),
@@ -122,10 +129,11 @@ class AuthController extends Controller
             );
         }
 
-        $isAdmin = $isAdminByConfig ||
+        $isAdmin = $isAdminByConfig || $isMoodleSiteAdmin ||
             count(array_intersect($adminMoodleRoleShortnames, is_array($moodleRoleShortnames) ? $moodleRoleShortnames : [])) > 0;
 
         // Create or update a local SIS user record. Password is random; Moodle is source of truth for auth.
+        // Admins also keep student so they can switch roles when enrolled in courses.
         $allowedRoles = ['admin', 'student'];
         $merged = array_merge($existingRoles, $isAdmin ? ['admin', 'student'] : ['student']);
         $finalRoles = array_values(array_unique(array_filter(
